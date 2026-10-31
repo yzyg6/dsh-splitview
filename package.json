@@ -1,9 +1,18 @@
 {
   "name": "dsh-splitview",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "main": "index.js",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yzyg6/dsh-splitview.git"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "test:dsh": "node tests/dsh-ui.mjs"
+  },
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
@@ -13,6 +22,7 @@
   "files": [
     "index.js",
     "client.js",
+    "CHANGELOG.md",
     "cordis.patch.yml",
     "locale/*.json",
     "icon.svg"
@@ -29,7 +39,7 @@
         "@deepseek-ai/dsh-client-ui-layout",
         "@deepseek-ai/dsh-client-ui-conversation",
         "@deepseek-ai/dsh-client-locale",
-        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-renderer",
         "@deepseek-ai/dsh-client-modules"
       ]
     }

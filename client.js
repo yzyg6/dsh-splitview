@@ -6,15 +6,14 @@
  * How it plugs into the host
  * --------------------------
  * The split view is not a separate panel. It takes over the shipped
- * `main.conversation` slot at `priority: -1`: the slot dispatcher sorts entries
- * by priority ascending and renders the lowest, so our entry shadows the
- * shipped conversation shell, and the shipped entry stays registered
- * underneath. Unregistering hands the panel straight back — no reload — which
- * is what the settings toggle and the "last pane closed" path use.
+ * `main.conversation` slot at `priority: -1`, reserving an empty seat there.
+ * The real pane tree lives in the root-scoped `shell.overlay`, positioned on
+ * that seat, so changing the host's current Session cannot remount the panes
+ * or interrupt a drag's pointer capture. Unregistering restores the shipped
+ * conversation shell without a reload.
  *
- * The takeover is only installed while there are actually two or more panes,
- * so a user who never splits keeps the stock conversation panel, header,
- * view tabs and all.
+ * The workspace keeps one horizontal tab strip in both single and split
+ * layouts. Each pane bridges the native session header and view controls.
  *
  * What a pane is
  * --------------
@@ -39,10 +38,14 @@ window.__ModuleLoader__.load({
 
 		const React = require("react");
 		const h = React.createElement;
+		const PaneContext = React.createContext(null);
 
 		//#region constants
 		const NS = "dsh-splitview";
 		const STORAGE_KEY = "dsh-splitview:layout:v3";
+		const READING_KEY = "dsh-splitview:reading:v1";
+		const OPEN_TIMEOUT_MS = 30000;
+		const nativeSlotName = (name) => name === "conversation.header" ? "splitview.hostHeader" : name === "conversation.session" ? "splitview.hostSession" : NS + ".native." + name;
 		/** Retention source. Deliberately NOT "mainView": mainView decides which
 		 * session the rest of the app calls "current", and that stays owned by the
 		 * workspace controller. */
@@ -60,36 +63,66 @@ window.__ModuleLoader__.load({
 		//#region styles
 		const CSS = `
 .dsv-root{position:relative;display:flex;flex-direction:column;width:100%;height:100%;min-width:0;min-height:0;background:var(--dsw-alias-bg-base)}
+.dsv-workspace-bar{display:flex;align-items:stretch;flex:0 0 36px;min-width:0;border-bottom:1px solid var(--dsw-alias-border-l3);color:var(--dsw-alias-label-secondary);font-family:inherit}
+.dsv-tabs-viewport{position:relative;display:flex;flex:1;min-width:0}
+.dsv-workspace-tabs{display:flex;flex:1;min-width:0;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;overscroll-behavior-x:contain}
+.dsv-workspace-tabs::-webkit-scrollbar{display:none}
+.dsv-tabbar{position:relative;display:flex;align-items:center;gap:2px;flex:none;height:36px;box-sizing:border-box;padding:0 4px;border-right:1px solid var(--dsw-alias-border-l3)}
+.dsv-tabbar:last-child{border-right:0;flex-grow:1;padding-right:24px}
+.dsv-group-number{display:inline-flex;align-items:center;justify-content:center;flex:none;width:18px;height:18px;margin:0 3px;border:1px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-sm,4px);color:var(--dsw-alias-label-tertiary);font-size:10px;font-variant-numeric:tabular-nums;user-select:none}
+.dsv-tabbar[data-active=true] .dsv-group-number{color:var(--dsw-alias-state-business-primary);border-color:color-mix(in srgb,var(--dsw-alias-state-business-primary) 45%,transparent)}
+.dsv-tab{position:relative;display:inline-flex;align-items:center;gap:8px;flex:none;min-width:112px;max-width:240px;height:36px;box-sizing:border-box;padding:0 9px;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);cursor:pointer;white-space:nowrap;user-select:none}
+.dsv-tab[data-visible=true]{color:var(--dsw-alias-label-secondary)}
+.dsv-tab:hover,.dsv-tab--active{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.dsv-tab--active{box-shadow:inset 0 -2px 0 var(--dsw-alias-state-business-primary)}
+.dsv-tab[data-insert]::before{content:"";position:absolute;top:5px;bottom:5px;width:2px;background:var(--dsw-alias-state-business-primary);z-index:1;pointer-events:none}
+.dsv-tab[data-insert=before]::before{left:-1px}
+.dsv-tab[data-insert=after]::before{right:-1px}
+.dsv-tab--broken .dsv-tab__label{text-decoration:line-through;opacity:.55}
+.dsv-tab__label{overflow:hidden;text-overflow:ellipsis}
+.dsv-tab__close{display:inline-flex;align-items:center;justify-content:center;flex:none;width:20px;height:20px;padding:0;border:0;border-radius:var(--dsw-radius-sm,4px);background:transparent;color:inherit;opacity:0;cursor:pointer}
+.dsv-tab:hover .dsv-tab__close,.dsv-tab[data-visible=true] .dsv-tab__close,.dsv-tab:focus-within .dsv-tab__close{opacity:.7}
+.dsv-tab__close:hover{opacity:1!important;background:var(--dsw-alias-interactive-bg-hover)}
+.dsv-workspace-actions{display:flex;align-items:center;gap:2px;padding:0 5px;flex:none;border-left:1px solid var(--dsw-alias-border-l3)}
+.dsv-workspace-actions button,.dsv-tabscroll{display:inline-flex;align-items:center;justify-content:center;flex:none;width:28px;height:28px;margin:auto 0;padding:0;border:0;border-radius:var(--dsw-radius-sm,4px);color:var(--dsw-alias-label-tertiary);background:transparent;cursor:pointer;font:inherit}
+.dsv-workspace-actions button:hover,.dsv-tabscroll:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.dsv-tabscroll:disabled{opacity:.3;cursor:default;background:transparent}
+.dsv-tab:focus-visible,.dsv-workspace-actions button:focus-visible,.dsv-tabscroll:focus-visible,.dsv-tab__close:focus-visible{outline:1px solid var(--dsw-alias-state-business-primary);outline-offset:-3px}
+.dsv-conversation-shell{display:flex;flex-direction:column;min-width:0;min-height:0;flex:1}
+.dsv-conversation-shell>.dsv-native-header{flex:none;min-width:0}
+.dsv-conversation-shell>[data-conversation-content]{flex:1;min-height:0}
+.dsv-root [data-conversation-scroll] nav[class*="_frame"]{display:block!important;right:4px;width:24px}
+.dsv-seat{flex:1 1 0;width:100%;height:100%;min-width:0;min-height:0}
+.dsv-surface{position:fixed;z-index:10;pointer-events:auto}
 .dsv-node{flex:1 1 auto;min-width:0;min-height:0;display:flex}
 .dsv-node[data-orientation="row"]{flex-direction:row}
 .dsv-node[data-orientation="col"]{flex-direction:column}
-.dsv-group{position:relative;display:flex;flex-direction:column;flex-grow:1;flex-shrink:1;flex-basis:0;min-width:0;min-height:0;outline:1px solid transparent;outline-offset:-1px;transition:outline-color var(--ds-transition-duration-slow) var(--ds-ease-in-out)}
+.dsv-layout{position:relative;display:flex;flex:1;min-width:0;min-height:0}
+.dsv-pane-seat{flex:1 1 0;min-width:0;min-height:0}
+.dsv-pane-layer{position:absolute;inset:0;pointer-events:none}
+.dsv-pane-layer>.dsv-group{pointer-events:auto}
+.dsv-group{position:relative;display:flex;flex-direction:column;flex-grow:1;flex-shrink:1;flex-basis:0;min-width:0;min-height:0;outline:1px solid transparent;outline-offset:-1px;}
 .dsv-group--active{outline-color:var(--dsw-alias-border-l3)}
-.dsv-group--drop{outline-color:var(--dsw-alias-brand-primary,#247bbf);outline-width:2px}
-.dsv-tabbar{display:flex;align-items:stretch;gap:2px;flex:0 0 30px;height:30px;padding:0 2px;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;border-bottom:1px solid var(--dsw-alias-border-l3);background:var(--dsw-alias-bg-base)}
-.dsv-tabbar::-webkit-scrollbar{display:none}
-.dsv-tab{position:relative;display:inline-flex;align-items:center;gap:6px;max-width:220px;min-width:0;margin:3px 0;padding:0 6px 0 9px;font-size:12px;line-height:1;color:var(--dsw-alias-fg-secondary);background:transparent;border:0;border-radius:5px;cursor:pointer;white-space:nowrap;user-select:none}
-.dsv-tab:hover{background:var(--dsw-alias-bg-l2)}
-.dsv-tab--active{background:var(--dsw-alias-bg-l2);color:inherit;box-shadow:inset 0 -2px 0 0 currentColor}
-.dsv-tab--broken .dsv-tab__label{text-decoration:line-through;opacity:.55}
-.dsv-tab__label{overflow:hidden;text-overflow:ellipsis}
-.dsv-tab__close{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;width:16px;height:16px;border:0;border-radius:4px;background:transparent;color:inherit;opacity:.55;cursor:pointer;font-size:11px;line-height:1;padding:0}
-.dsv-tab__close:hover{opacity:1;background:var(--dsw-alias-bg-l3,#00000014)}
-.dsv-ins{position:absolute;top:2px;bottom:2px;width:2px;border-radius:2px;background:var(--dsw-alias-brand-primary,#247bbf);pointer-events:none}
-.dsv-tabbar__add{flex:0 0 auto;width:22px;margin:3px 0;border:0;border-radius:5px;background:transparent;color:var(--dsw-alias-fg-secondary);cursor:pointer;font-size:14px;line-height:1;padding:0}
-.dsv-tabbar__add:hover{background:var(--dsw-alias-bg-l2)}
-.dsv-tabbar__menu{flex:0 0 auto;width:22px;margin:3px 0;border:0;border-radius:5px;background:transparent;color:var(--dsw-alias-fg-secondary);cursor:pointer;font-size:13px;line-height:1;padding:0}
-.dsv-tabbar__menu:hover{background:var(--dsw-alias-bg-l2)}
+.dsv-group--drop{outline-color:var(--dsw-alias-state-business-primary,#247bbf);outline-width:2px}
 .dsv-body{flex:1 1 auto;min-width:0;min-height:0;display:flex;overflow:hidden}
 .dsv-body>*{flex:1 1 0;min-width:0;min-height:0}
+.dsv-tabbody{display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden}
+.dsv-tabbody[hidden]{display:none}
+.dsv-tabbody>*{flex:1 1 0;min-width:0;min-height:0}
 .dsv-resizer{flex:0 0 6px;position:relative;background:transparent;touch-action:none}
 .dsv-resizer::after{content:"";position:absolute;background:var(--dsw-alias-border-l3);opacity:.55}
 .dsv-node[data-orientation="row"]>.dsv-resizer{cursor:col-resize}
 .dsv-node[data-orientation="row"]>.dsv-resizer::after{top:0;bottom:0;left:50%;width:1px}
 .dsv-node[data-orientation="col"]>.dsv-resizer{cursor:row-resize}
 .dsv-node[data-orientation="col"]>.dsv-resizer::after{left:0;right:0;top:50%;height:1px}
-.dsv-resizer:hover::after,.dsv-resizer:active::after{opacity:1}
-.dsv-drop{position:absolute;z-index:2;pointer-events:none;background:var(--dsw-alias-brand-primary,#247bbf);opacity:.16;border-radius:6px}
+.dsv-resizer:hover::after,.dsv-resizer:active::after{opacity:1;background:var(--dsw-alias-state-business-primary)}
+.dsv-resize-preview{position:fixed;z-index:900;pointer-events:none;will-change:transform;background:color-mix(in srgb,var(--dsw-alias-state-business-primary,#247bbf) 18%,transparent)}
+.dsv-resize-preview::after{content:"";position:absolute;background:var(--dsw-alias-state-business-primary,#247bbf);box-shadow:0 0 6px color-mix(in srgb,var(--dsw-alias-state-business-primary,#247bbf) 40%,transparent)}
+.dsv-resize-preview[data-axis="row"]::after{top:0;bottom:0;left:2px;width:2px}
+.dsv-resize-preview[data-axis="col"]::after{left:0;right:0;top:2px;height:2px}
+.dsv-node[data-dsv-resizing="row"],.dsv-node[data-dsv-resizing="row"] *{cursor:col-resize!important;user-select:none!important}
+.dsv-node[data-dsv-resizing="col"],.dsv-node[data-dsv-resizing="col"] *{cursor:row-resize!important;user-select:none!important}
+.dsv-drop{position:absolute;z-index:2;pointer-events:none;background:var(--dsw-alias-state-business-primary,#247bbf);opacity:.16;border-radius:6px}
 .dsv-drop[data-zone="left"]{left:0;top:0;bottom:0;width:50%}
 .dsv-drop[data-zone="right"]{right:0;top:0;bottom:0;width:50%}
 .dsv-drop[data-zone="top"]{left:0;right:0;top:0;height:50%}
@@ -97,34 +130,34 @@ window.__ModuleLoader__.load({
 .dsv-drop[data-zone="center"]{left:0;right:0;top:0;bottom:0;opacity:.08}
 /* Painted on the conversation region itself while a session is dragged over
    it: no overlay component has to be mounted for the hint to appear. */
-[data-dsv-drop]{position:relative;outline:2px dashed var(--dsw-alias-brand-primary,#247bbf);outline-offset:-2px}
-[data-dsv-drop]::after{content:"";position:absolute;z-index:3;pointer-events:none;background:var(--dsw-alias-brand-primary,#247bbf);opacity:.14;border-radius:6px}
+[data-dsv-drop]{position:relative;outline:2px dashed var(--dsw-alias-state-business-primary,#247bbf);outline-offset:-2px}
+[data-dsv-drop]::after{content:"";position:absolute;z-index:3;pointer-events:none;background:var(--dsw-alias-state-business-primary,#247bbf);opacity:.14;border-radius:6px}
 [data-dsv-drop="left"]::after{left:0;top:0;bottom:0;width:50%}
 [data-dsv-drop="right"]::after{right:0;top:0;bottom:0;width:50%}
 [data-dsv-drop="top"]::after{left:0;right:0;top:0;height:50%}
 [data-dsv-drop="bottom"]::after{left:0;right:0;bottom:0;height:50%}
 [data-dsv-drop="center"]::after{left:0;right:0;top:0;bottom:0;opacity:.07}
-.dsv-ctx{position:fixed;z-index:1200;min-width:190px;padding:4px;border-radius:8px;background:var(--dsw-alias-bg-base);border:1px solid var(--dsw-alias-border-l3);box-shadow:0 6px 24px #0000002e}
+.dsv-ctx{position:fixed;z-index:1200;min-width:190px;padding:4px;border-radius:8px;background:var(--dsw-specific-menu,var(--dsw-alias-bg-layer-1));backdrop-filter:var(--dsw-menu-backdrop-filter);border:1px solid var(--dsw-alias-border-l3);box-shadow:var(--dsw-elevation-prominent)}
 .dsv-ctx__item{display:flex;align-items:center;gap:8px;width:100%;padding:6px 9px;border:0;border-radius:5px;background:transparent;color:inherit;font-size:12px;line-height:1.4;text-align:left;cursor:pointer}
-.dsv-ctx__item:hover{background:var(--dsw-alias-bg-l2)}
+.dsv-ctx__item:hover{background:var(--dsw-alias-bg-layer-1)}
 .dsv-ctx__item[disabled]{opacity:.4;cursor:default}
 .dsv-ctx__sep{height:1px;margin:4px 6px;background:var(--dsw-alias-border-l3)}
 .dsv-picker{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;gap:8px;padding:12px}
-.dsv-picker__search{flex:0 0 auto;height:30px;padding:0 9px;font-size:12px;color:inherit;background:var(--dsw-alias-bg-l2);border:1px solid var(--dsw-alias-border-l3);border-radius:6px;outline:0}
-.dsv-picker__search:focus{border-color:var(--dsw-alias-brand-primary,#247bbf)}
+.dsv-picker__search{flex:0 0 auto;height:30px;padding:0 9px;font-size:12px;color:inherit;background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l3);border-radius:6px;outline:0}
+.dsv-picker__search:focus{border-color:var(--dsw-alias-state-business-primary,#247bbf)}
 .dsv-picker__list{flex:1 1 auto;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:2px}
 .dsv-picker__row{display:flex;flex-direction:column;align-items:flex-start;gap:2px;width:100%;padding:6px 8px;border:0;border-radius:6px;background:transparent;color:inherit;text-align:left;cursor:pointer}
-.dsv-picker__row:hover{background:var(--dsw-alias-bg-l2)}
+.dsv-picker__row:hover{background:var(--dsw-alias-bg-layer-1)}
 .dsv-picker__title{font-size:12px;line-height:1.35;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.dsv-picker__meta{font-size:11px;line-height:1.3;color:var(--dsw-alias-fg-secondary);max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.dsv-empty{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:16px;font-size:12px;color:var(--dsw-alias-fg-secondary);text-align:center}
+.dsv-picker__meta{font-size:11px;line-height:1.3;color:var(--dsw-alias-label-caption);max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dsv-empty{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:16px;font-size:12px;color:var(--dsw-alias-label-caption);text-align:center}
 .dsv-empty--error{color:var(--dsw-alias-fg-danger,#c0392b)}
 .dsv-empty__actions{display:flex;gap:6px}
-.dsv-spin{width:16px;height:16px;border:2px solid var(--dsw-alias-border-l3);border-top-color:var(--dsw-alias-fg-secondary);border-radius:50%;animation:dsv-spin .8s linear infinite}
+.dsv-spin{width:16px;height:16px;border:2px solid var(--dsw-alias-border-l3);border-top-color:var(--dsw-alias-label-caption);border-radius:50%;animation:dsv-spin .8s linear infinite}
 @keyframes dsv-spin{to{transform:rotate(360deg)}}
-.dsv-linkbtn{border:0;background:transparent;color:var(--dsw-alias-brand-primary,#247bbf);font-size:12px;cursor:pointer;padding:2px 4px}
+.dsv-linkbtn{border:0;background:transparent;color:var(--dsw-alias-state-business-primary,#247bbf);font-size:12px;cursor:pointer;padding:2px 4px}
 .dsv-hbtn{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border:0;border-radius:5px;background:transparent;color:inherit;cursor:pointer;padding:0}
-.dsv-hbtn:hover{background:var(--dsw-alias-bg-l2)}
+.dsv-hbtn:hover{background:var(--dsw-alias-bg-layer-1)}
 .dsv-hbtn[disabled]{opacity:.35;cursor:default}
 /* The shipped formula measures the gutter between content and pane edge and
    collapses to a negative width once a pane is narrower than the content cap,
@@ -141,13 +174,13 @@ window.__ModuleLoader__.load({
 .dsv-set__row{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}
 .dsv-set__text{display:flex;flex-direction:column;gap:3px;min-width:0}
 .dsv-set__title{font-size:13px;line-height:1.4}
-.dsv-set__desc{font-size:12px;line-height:1.5;color:var(--dsw-alias-fg-secondary)}
+.dsv-set__desc{font-size:12px;line-height:1.5;color:var(--dsw-alias-label-caption)}
 .dsv-set__ctl{flex:0 0 auto;display:flex;align-items:center;gap:6px}
-.dsv-set select,.dsv-set button.dsv-set__btn{height:28px;padding:0 8px;font-size:12px;color:inherit;background:var(--dsw-alias-bg-l2);border:1px solid var(--dsw-alias-border-l3);border-radius:6px;cursor:pointer}
-.dsv-set kbd{font-family:inherit;font-size:11px;padding:1px 5px;border:1px solid var(--dsw-alias-border-l3);border-radius:4px;background:var(--dsw-alias-bg-l2)}
-.dsv-set__keys{display:flex;flex-direction:column;gap:6px;font-size:12px;line-height:1.6;color:var(--dsw-alias-fg-secondary)}
+.dsv-set select,.dsv-set button.dsv-set__btn{height:28px;padding:0 8px;font-size:12px;color:inherit;background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l3);border-radius:6px;cursor:pointer}
+.dsv-set kbd{font-family:inherit;font-size:11px;padding:1px 5px;border:1px solid var(--dsw-alias-border-l3);border-radius:4px;background:var(--dsw-alias-bg-layer-1)}
+.dsv-set__keys{display:flex;flex-direction:column;gap:6px;font-size:12px;line-height:1.6;color:var(--dsw-alias-label-caption)}
 .dsv-set__keys div{display:flex;gap:8px;align-items:center}
-.dsv-set__hint{font-size:12px;line-height:1.6;color:var(--dsw-alias-fg-secondary);padding-top:4px;border-top:1px solid var(--dsw-alias-border-l3)}
+.dsv-set__hint{font-size:12px;line-height:1.6;color:var(--dsw-alias-label-caption);padding-top:4px;border-top:1px solid var(--dsw-alias-border-l3)}
 `;
 		let stylesInstalled = false;
 		function installStyles() {
@@ -412,17 +445,12 @@ window.__ModuleLoader__.load({
 			let state = loadState();
 			const listeners = new Set();
 			let timer = null;
-			const persist = () => {
-				if (timer !== null) return;
-				timer = setTimeout(() => {
-					timer = null;
-					try {
-						localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-					} catch (error) {
-						/* storage unavailable: degrade to memory-only */
-					}
-				}, 250);
+			const flush = () => {
+				clearTimeout(timer);
+				timer = null;
+				try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (error) { /* unavailable: memory-only */ }
 			};
+			const persist = () => { if (timer === null) timer = setTimeout(flush, 250); };
 			const set = (next) => {
 				if (next === state) return;
 				state = next;
@@ -438,7 +466,8 @@ window.__ModuleLoader__.load({
 
 			const withRoot = (root, patch) => {
 				const groups = listGroups(root);
-				const activeGroupId = groups.some((g) => g.id === state.activeGroupId) ? state.activeGroupId : groups[0].id;
+				const requested = patch.activeGroupId || state.activeGroupId;
+				const activeGroupId = groups.some((g) => g.id === requested) ? requested : groups[0].id;
 				return { ...state, ...patch, root, activeGroupId };
 			};
 
@@ -456,7 +485,7 @@ window.__ModuleLoader__.load({
 					set(withRoot(root, { activeGroupId: groupId }));
 				},
 				setSession(groupId, tabId, sessionId) {
-					if (typeof sessionId !== "string" || sessionId === "") return;
+					if (sessionId !== null && (typeof sessionId !== "string" || sessionId === "")) return;
 					const group = findGroup(state.root, groupId);
 					if (!group || !group.tabs.some((t) => t.id === tabId)) return;
 					const root = updateGroup(state.root, groupId, (g) => ({
@@ -569,10 +598,12 @@ window.__ModuleLoader__.load({
 					if (!tab) return;
 					if (fromGroupId === toGroupId) {
 						const tabs = from.tabs.filter((t) => t.id !== tabId);
-						const at = Math.max(0, Math.min(index, tabs.length));
+						const sourceIndex = from.tabs.findIndex((t) => t.id === tabId);
+						const gap = index > sourceIndex ? index - 1 : index;
+						const at = Math.max(0, Math.min(gap, tabs.length));
 						tabs.splice(at, 0, tab);
-						const root = updateGroup(state.root, fromGroupId, (g) => ({ ...g, tabs }));
-						set({ ...state, root });
+						const root = updateGroup(state.root, fromGroupId, (g) => ({ ...g, tabs, activeTabId: tab.id }));
+						set(withRoot(root, { activeGroupId: fromGroupId }));
 						return;
 					}
 					const fromTabs = from.tabs.filter((t) => t.id !== tabId);
@@ -588,28 +619,30 @@ window.__ModuleLoader__.load({
 					}
 					set(withRoot(root, { activeGroupId: toGroupId }));
 				},
-				/** Split a tab out into a new group beside its source. */
-				moveTabToNewGroup(tabId, fromGroupId, orientation) {
-					if (countGroups(state.root) >= state.maxPanes) return null;
+				/** Detach at the target edge; preserve the tab's reading-memory key. */
+				moveTabToNewGroup(tabId, fromGroupId, orientation, position = "after", targetGroupId = fromGroupId) {
 					const from = findGroup(state.root, fromGroupId);
-					if (!from) return null;
+					if (!from || !findGroup(state.root, targetGroupId)) return null;
 					const tab = from.tabs.find((t) => t.id === tabId);
 					if (!tab) return null;
+					const replacesSource = from.tabs.length === 1 && targetGroupId !== fromGroupId;
+					if (!replacesSource && countGroups(state.root) >= state.maxPanes) return null;
 					const axis = orientation === "col" ? "col" : "row";
-					if (from.tabs.length === 1) {
-						const created = makeGroup(null);
-						const root = insertGroup(state.root, fromGroupId, created, axis, "after");
-						set(withRoot(root, { activeGroupId: created.id }));
-						return created.id;
-					}
+					const side = position === "before" ? "before" : "after";
 					const created = makeGroup(tab.sessionId);
-					const fromTabs = from.tabs.filter((t) => t.id !== tabId);
-					let root = updateGroup(state.root, fromGroupId, (g) => ({
-						...g,
-						tabs: fromTabs,
-						activeTabId: g.activeTabId === tabId ? fromTabs[0].id : g.activeTabId,
-					}));
-					root = insertGroup(root, fromGroupId, created, axis, "after");
+					let root = state.root;
+					// Splitting the sole tab beside itself mirrors the explicit split
+					// button. Otherwise move the existing tab, keeping its identity.
+					if (from.tabs.length > 1 || replacesSource) {
+						created.tabs = [tab]; created.activeTabId = tab.id;
+						const fromTabs = from.tabs.filter((t) => t.id !== tabId);
+						if (fromTabs.length === 0) root = removeGroup(root, fromGroupId);
+						else root = updateGroup(root, fromGroupId, (g) => ({
+							...g, tabs: fromTabs,
+							activeTabId: g.activeTabId === tabId ? fromTabs[0].id : g.activeTabId,
+						}));
+					}
+					root = insertGroup(root, targetGroupId, created, axis, side);
 					set(withRoot(root, { activeGroupId: created.id }));
 					return created.id;
 				},
@@ -640,7 +673,7 @@ window.__ModuleLoader__.load({
 						listeners.delete(listener);
 					};
 				},
-				actions,
+				actions, flush,
 			};
 		}
 
@@ -721,6 +754,19 @@ window.__ModuleLoader__.load({
 			const key = ids.slice().sort().join("|");
 			const mapRef = React.useRef(new Map());
 			const [, force] = React.useReducer((n) => n + 1, 0);
+			const retry = React.useCallback((id) => {
+				const map = mapRef.current;
+				const previous = map.get(id);
+				try {
+					// Acquire first so retry cannot retire the live session scope.
+					const reference = runtime.sessions.retain(id, { source: SOURCE });
+					map.set(id, { kind: "held", reference });
+				} catch (error) {
+					map.set(id, { kind: "failed", message: describeError(error) });
+				}
+				releaseEntry(previous);
+				force();
+			}, []);
 
 			React.useEffect(() => {
 				const sessions = runtime.sessions;
@@ -756,7 +802,7 @@ window.__ModuleLoader__.load({
 				[],
 			);
 
-			return mapRef.current;
+			return { entries: mapRef.current, retry };
 		}
 
 		/** The session the rest of the app calls "current". */
@@ -938,9 +984,256 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 
+		//#region per-tab reading memory
+		function createReadingMemory(storage) {
+			const entries = new Map();
+			let timer = 0;
+			try {
+				const saved = JSON.parse(storage.getItem(READING_KEY) || "[]");
+				if (Array.isArray(saved)) for (const item of saved.slice(-100)) {
+					if (!Array.isArray(item) || typeof item[0] !== "string") continue;
+					const value = item[1];
+					if (value && Number.isFinite(value.top) && value.top >= 0 && typeof value.bottom === "boolean") entries.set(item[0], {
+						top: value.top, bottom: value.bottom,
+						historySeq: Number.isInteger(value.historySeq) && value.historySeq >= 0 ? value.historySeq : null,
+						anchorKey: typeof value.anchorKey === "string" ? value.anchorKey : null,
+						anchorTop: Number.isFinite(value.anchorTop) ? value.anchorTop : 0,
+						disclosures: Array.isArray(value.disclosures) ? value.disclosures.filter((item) => item && typeof item.key === "string" && Number.isInteger(item.index) && item.index >= 0 && typeof item.open === "boolean").slice(0, 64) : [],
+					});
+				}
+			} catch (error) { /* unavailable or invalid storage */ }
+			const flush = () => {
+				clearTimeout(timer);
+				timer = 0;
+				try { storage.setItem(READING_KEY, JSON.stringify([...entries])); } catch (error) { /* memory-only fallback */ }
+			};
+			return {
+				get: (key) => entries.get(key),
+				put(key, value) {
+					entries.delete(key);
+					entries.set(key, value);
+					while (entries.size > 100) entries.delete(entries.keys().next().value);
+					clearTimeout(timer);
+					timer = setTimeout(flush, 200);
+				},
+				flush,
+			};
+		}
+		const readingMemory = createReadingMemory({
+			getItem: (key) => localStorage.getItem(key),
+			setItem: (key, value) => localStorage.setItem(key, value),
+		});
+
+		const readingCaptures = new Set();
+		function persistWorkspace() {
+			for (const capture of readingCaptures) { try { capture(); } catch (error) { /* a removed DOM must not block the other tabs */ } }
+			store.flush();
+			readingMemory.flush();
+		}
+		/** Let the native reader initialize from this tab, rather than its session-
+		 * global scroll cache. The DOM capture remains the persisted authority. */
+		function createNativeReadingStore(key) {
+			const saved = readingMemory.get(key);
+			let position = saved && !saved.bottom ? { anchorKey: saved.anchorKey || "", anchorTop: saved.anchorTop || 0, scrollTop: saved.top } : null;
+			return { read: () => position, save: (next) => { position = next; } };
+		}
+		function NativePaneViews(props) {
+			const pane = React.useContext(PaneContext);
+			return pane ? pane.renderSlot("splitview.hostSession", {}) : props.renderSlot("conversation.session", {});
+		}
+
+		function loadedHistorySeq(sessionId) {
+			const binding = runtime.sessions && runtime.sessions.binding && runtime.sessions.binding(sessionId);
+			const entries = binding && binding.eventSource.getSnapshot().entries;
+			const first = entries && entries.find((entry) => entry.event && Number.isInteger(entry.event.seq));
+			return first ? first.event.seq : null;
+		}
+		function loadReadingHistory(sessionId, saved) {
+			if (!saved || saved.bottom || !Number.isInteger(saved.historySeq) || saved.historySeq < 0) return null;
+			const current = loadedHistorySeq(sessionId);
+			const binding = runtime.sessions && runtime.sessions.binding && runtime.sessions.binding(sessionId);
+			return binding && current !== null && current > saved.historySeq ? binding.session.loadThrough(saved.historySeq) : null;
+		}
+
+		function captureReading(scroller) {
+			if (!scroller || scroller.clientHeight <= 0) return null;
+			const top = scroller.scrollTop;
+			const edge = scroller.getBoundingClientRect().top;
+			const anchor = [...scroller.querySelectorAll("[data-chat-anchor-key]")].find((node) => {
+				const box = node.getBoundingClientRect();
+				return node.getAttribute("data-chat-flow-kind") !== "turn-process" && box.height > 0 && box.bottom > edge && box.top < edge + scroller.clientHeight;
+			});
+			return {
+				top, bottom: scroller.scrollHeight - scroller.clientHeight - top <= 32,
+				anchorKey: anchor ? anchor.getAttribute("data-chat-anchor-key") : null,
+				anchorTop: anchor ? anchor.getBoundingClientRect().top - edge : 0,
+				disclosures: [...scroller.querySelectorAll("button[aria-expanded]:not([aria-haspopup]),details")].flatMap((control) => {
+					const row = control.closest("[data-chat-anchor-key]");
+					if (!row) return [];
+					const controls = [...row.querySelectorAll("button[aria-expanded]:not([aria-haspopup]),details")].filter((item) => item.closest("[data-chat-anchor-key]") === row);
+					return [{ key: row.getAttribute("data-chat-anchor-key"), index: controls.indexOf(control), open: control.tagName === "DETAILS" ? control.open : control.getAttribute("aria-expanded") === "true" }];
+				}).slice(0, 64),
+			};
+		}
+
+		function restoreReading(scroller, saved, requireAnchor = false) {
+			if (!scroller || scroller.clientHeight <= 0) return false;
+			const anchors = new Map([...scroller.querySelectorAll("[data-chat-anchor-key]")].map((node) => [node.getAttribute("data-chat-anchor-key"), node]));
+			if (requireAnchor && !saved.bottom && saved.anchorKey && !anchors.has(saved.anchorKey)) return false;
+			for (const state of saved.disclosures || []) {
+				const row = anchors.get(state.key);
+				if (!row) continue;
+				const control = [...row.querySelectorAll("button[aria-expanded]:not([aria-haspopup]),details")].filter((item) => item.closest("[data-chat-anchor-key]") === row)[state.index];
+				if (!control) continue;
+				if (control.tagName === "DETAILS") control.open = state.open;
+				else if ((control.getAttribute("aria-expanded") === "true") !== state.open) control.click();
+			}
+			if (saved.bottom) scroller.scrollTop = scroller.scrollHeight - scroller.clientHeight;
+			else {
+				const candidate = anchors.get(saved.anchorKey);
+				const anchor = candidate && candidate.getBoundingClientRect().height > 0 ? candidate : null;
+				scroller.scrollTop = anchor
+					? scroller.scrollTop + anchor.getBoundingClientRect().top - scroller.getBoundingClientRect().top - saved.anchorTop
+					: saved.top;
+			}
+			return true;
+		}
+
+		function ReadingTab(props) {
+			const { tab, active, children } = props;
+			const root = React.useRef(null);
+			const key = tab.id + ":" + (tab.sessionId || "picker");
+			React.useLayoutEffect(() => {
+				const node = root.current;
+				if (!node || !active || !tab.sessionId) return undefined;
+				const saved = readingMemory.get(key);
+				let restoring = Boolean(saved), frame = 0, settled = 0, historyPending = false, historyAttempted = false;
+				let observer = null, resize = null, watchTarget = null;
+				const scroller = () => node.querySelector("[data-conversation-scroll]");
+				const capture = () => {
+					if (restoring) return;
+					const value = captureReading(scroller());
+					if (value) readingMemory.put(key, { ...value, historySeq: loadedHistorySeq(tab.sessionId) });
+				};
+				const stop = () => {
+					restoring = false; cancelAnimationFrame(frame); clearTimeout(settled);
+					if (observer) observer.disconnect(); if (resize) resize.disconnect();
+				};
+				const restore = () => {
+					if (!restoring || frame || historyPending) return;
+					const body = scroller();
+					if (!body || !body.querySelector("[data-chat-anchor-key]")) return;
+					if (!historyAttempted) {
+						historyAttempted = true;
+						let pending;
+						try { pending = loadReadingHistory(tab.sessionId, saved); } catch (error) { stop(); return; }
+						if (pending && typeof pending.then === "function") {
+							historyPending = true;
+							Promise.resolve(pending).then(() => { historyPending = false; restore(); }, stop);
+							return;
+						}
+					}
+					// Observe the content's height as well as new nodes: asynchronous
+					// cards/fonts can reflow after the initial scroll has settled.
+					let content = body.querySelector("[data-chat-anchor-key]");
+					while (content && content.parentElement !== body) content = content.parentElement;
+					if (resize && content && watchTarget !== content) { resize.disconnect(); resize.observe(content); watchTarget = content; }
+					frame = requestAnimationFrame(() => {
+						frame = requestAnimationFrame(() => {
+							frame = 0;
+							if (restoring && restoreReading(body, saved, Number.isInteger(saved.historySeq))) {
+								clearTimeout(settled);
+								settled = setTimeout(() => { stop(); capture(); }, 1000);
+							}
+						});
+					});
+				};
+				const onScroll = (event) => {
+					if (event.target !== scroller()) return;
+					if (restoring) restore(); else capture();
+				};
+				const onDisclosure = () => { requestAnimationFrame(capture); };
+				node.addEventListener("scroll", onScroll, true);
+				node.addEventListener("click", onDisclosure);
+				node.addEventListener("toggle", onDisclosure, true);
+				for (const name of ["wheel", "pointerdown", "keydown"]) node.addEventListener(name, stop, true);
+				observer = new MutationObserver(restore);
+				observer.observe(node, { childList: true, subtree: true, attributes: true, attributeFilter: ["open", "aria-expanded"] });
+				resize = new ResizeObserver(restore);
+				const deadline = setTimeout(stop, OPEN_TIMEOUT_MS);
+				readingCaptures.add(capture);
+				restore();
+				return () => {
+					capture(); readingCaptures.delete(capture);
+					stop(); clearTimeout(deadline);
+					node.removeEventListener("scroll", onScroll, true);
+					node.removeEventListener("click", onDisclosure);
+					node.removeEventListener("toggle", onDisclosure, true);
+					for (const name of ["wheel", "pointerdown", "keydown"]) node.removeEventListener(name, stop, true);
+				};
+			}, [key, active]);
+			return h("div", { ref: root, className: "dsv-tabbody", id: "dsv-panel-" + tab.id, role: "tabpanel", "aria-labelledby": "dsv-tab-" + tab.id, hidden: !active, "data-dsv-tab-body": tab.id }, children);
+		}
+		//#endregion
+
 		//#region pane body
-		function FixedChatView(props) {
-			return h(React.Fragment, null, props.renderSlot("conversation.session", { view: "chat" }));
+		/** Mirror native header registrations into our owned namespace. Keep the
+		 * host's components, scoped stores, injections and extension entries; only
+		 * child slot names change, so ownership stays with the original plugin. */
+		function installNativeHeader(ctx) {
+			const mirrors = new Map();
+			const subscriptions = new Map();
+			let stopped = false, syncing = false;
+			const sync = () => {
+				if (stopped || syncing) return;
+				syncing = true;
+				try {
+					const wanted = new Map(), visited = new Set();
+					const visit = (name) => {
+						if (visited.has(name)) return;
+						visited.add(name);
+						if (!subscriptions.has(name)) subscriptions.set(name, ctx.slots.subscribe(name, sync));
+						for (const entry of ctx.slots.entries(name)) {
+							wanted.set(entry, name);
+							for (const key of Object.keys(entry.children || {})) visit(key);
+						}
+					};
+					visit("conversation.header");
+					visit("conversation.session");
+					// Release obsolete declarations before installing their replacements.
+					for (const [entry, dispose] of [...mirrors].reverse()) if (!wanted.has(entry)) { dispose(); mirrors.delete(entry); }
+					for (const [entry, name] of wanted) {
+						if (!mirrors.has(entry)) {
+							const children = entry.children && Object.fromEntries(Object.entries(entry.children).map(([key, spec]) => [nativeSlotName(key), spec]));
+							const Native = entry.component;
+							const Forward = (props) => {
+								const pane = React.useContext(PaneContext);
+								const chatScroll = React.useMemo(() => pane && name === "conversation.view" && entry.options.id === "chat" ? createNativeReadingStore(pane.readingKey) : null, [pane && pane.readingKey]);
+								return h(Native, {
+									...props,
+									...(chatScroll ? { chatScroll } : {}),
+									...(props.renderSlot ? { renderSlot: (key, owner, options) => props.renderSlot(nativeSlotName(key), owner, options) } : {}),
+									...(props.renderSlotChain ? { renderSlotChain: (key, owner, options) => props.renderSlotChain(nativeSlotName(key), owner, options) } : {}),
+								});
+							};
+							mirrors.set(entry, ctx.slots.inject(nativeSlotName(name), () => ctx.slots.register({
+								...entry.options, name: nativeSlotName(name),
+								...(entry.inject ? { inject: entry.inject } : {}),
+								...(entry.store ? { store: entry.store } : {}),
+								...(entry.locale ? { locale: entry.locale } : {}),
+								...(entry.select ? { select: entry.select } : {}),
+								...(children ? { children } : {}),
+							}, Forward)));
+						}
+					}
+				} finally { syncing = false; }
+			};
+			sync();
+			return () => {
+				stopped = true;
+				for (const off of subscriptions.values()) off();
+				for (const dispose of [...mirrors.values()].reverse()) dispose();
+			};
 		}
 
 		/**
@@ -948,7 +1241,8 @@ window.__ModuleLoader__.load({
 		 * renderer hands it the owning session's scoped hooks.
 		 */
 		function PaneBody(props) {
-			const { renderFactorySlot, useSession, useSessions, useConversation, sessionId } = props;
+			const { renderFactorySlot, renderSlot, useSession, useSessions, useConversation, sessionId, tabId } = props;
+			const pane = React.useMemo(() => ({ renderSlot, readingKey: tabId + ":" + sessionId }), [renderSlot, tabId, sessionId]);
 			// Every one of these is a uSES selector hook built by the renderer
 			// (bindSnapshotSelector): the selector is mandatory, so pass an identity
 			// function when we want the whole snapshot.
@@ -969,51 +1263,62 @@ window.__ModuleLoader__.load({
 				phase = settling ? "settling" : hero ? "hero" : "active";
 			}
 
-			return renderFactorySlot("conversation.content", { variant: "embedded", phase, hero }, { slots: { views: FixedChatView, widthControls: WidthControls } });
+			return h(PaneContext.Provider, { value: pane }, h("div", { className: "dsv-conversation-shell" },
+				h("div", { className: "dsv-native-header" }, renderSlot("splitview.hostHeader", {})),
+				renderFactorySlot("conversation.content", { variant: "embedded", phase, hero }, { slots: { views: NativePaneViews, widthControls: WidthControls } })));
 		}
 
 		function useReferenceReady(status) {
-			const [ready, setReady] = React.useState(false);
+			const [result, setResult] = React.useState({ status: null, kind: "loading" });
 			React.useEffect(() => {
-				setReady(false);
+				setResult({ status, kind: "loading" });
 				if (!status || status.kind !== "held") return undefined;
 				const reference = status.reference;
 				let cancelled = false;
+				const timer = setTimeout(() => {
+					if (!cancelled) setResult({ status, kind: "failed", message: runtime.t("loadTimeout") });
+				}, OPEN_TIMEOUT_MS);
 				const promise = reference && reference.ready;
 				if (promise && typeof promise.then === "function") {
 					promise.then(
 						() => {
-							if (!cancelled) setReady(true);
+							clearTimeout(timer);
+							if (!cancelled) setResult({ status, kind: "ready" });
 						},
-						() => {
-							if (!cancelled) setReady(false);
+						(error) => {
+							clearTimeout(timer);
+							if (!cancelled) setResult({ status, kind: "failed", message: describeError(error) });
 						},
 					);
 				} else {
-					setReady(true);
+					clearTimeout(timer);
+					setResult({ status, kind: "ready" });
 				}
 				return () => {
 					cancelled = true;
+					clearTimeout(timer);
 				};
 			}, [status]);
-			return ready;
+			return result.status === status ? result : { kind: "loading" };
 		}
 
 		function SessionHost(props) {
-			const { status, onRetry, children } = props;
+			const { status, onRetry, onChoose, children } = props;
 			const t = runtime.t;
-			const ready = useReferenceReady(status);
+			const readiness = useReferenceReady(status);
 			if (!status || status.kind === "missing") return h("div", { className: "dsv-empty" }, t("loading"));
-			if (status.kind === "failed") {
+			if (status.kind === "failed" || readiness.kind === "failed") {
 				return h(
 					"div",
-					{ className: "dsv-empty dsv-empty--error" },
+					{ className: "dsv-empty dsv-empty--error", role: "alert" },
 					h("div", null, t("failedSession")),
-					h("div", { className: "dsv-picker__meta" }, status.message || ""),
-					h("div", { className: "dsv-empty__actions" }, h("button", { type: "button", className: "dsv-linkbtn", onClick: onRetry }, t("pickAnother"))),
+					h("div", { className: "dsv-picker__meta" }, status.message || readiness.message || ""),
+					h("div", { className: "dsv-empty__actions" },
+						h("button", { type: "button", className: "dsv-linkbtn", onClick: onRetry }, t("retrySession")),
+						h("button", { type: "button", className: "dsv-linkbtn", onClick: onChoose }, t("pickAnother"))),
 				);
 			}
-			if (!ready) return h("div", { className: "dsv-empty" }, h("div", { className: "dsv-spin", "aria-hidden": true }));
+			if (readiness.kind !== "ready") return h("div", { className: "dsv-empty", role: "status", "aria-label": t("loading") }, h("div", { className: "dsv-spin", "aria-hidden": true }));
 			const SessionProvider = props.SessionProvider;
 			if (typeof SessionProvider !== "function") return h("div", { className: "dsv-empty" }, t("conversationUnavailable"));
 			return h(SessionProvider, { session: status.reference }, children);
@@ -1072,10 +1377,7 @@ window.__ModuleLoader__.load({
 			const applyDelta = (pixels) => {
 				const drag = dragRef.current;
 				if (!drag) return;
-				const box = stackRef.current ? stackRef.current.getBoundingClientRect() : null;
-				const extent = box ? (orientation === "row" ? box.width : box.height) : 0;
-				if (!(extent > 0)) return;
-				const fraction = pixels / extent;
+				const fraction = pixels / drag.extent;
 				const a0 = drag.base[index];
 				const b0 = drag.base[index + 1];
 				const pair = a0 + b0;
@@ -1084,11 +1386,32 @@ window.__ModuleLoader__.load({
 				const next = drag.base.slice();
 				next[index] = a;
 				next[index + 1] = pair - a;
-				store.actions.setSizes(splitId, next);
+				drag.next = next;
+				// Resizing the actual text columns triggers expensive host layout,
+				// even without React updates. Only a compositor-backed guide moves
+				// during the gesture; one layout commit follows on pointer-up.
+				const offset = (a - a0) * drag.extent;
+				drag.preview.style.transform = orientation === "row" ? `translate3d(${offset}px,0,0)` : `translate3d(0,${offset}px,0)`;
 			};
 
 			const onPointerDown = (event) => {
 				if (event.button !== undefined && event.button !== 0) return;
+				if (dragRef.current) return;
+				const stack = stackRef.current;
+				if (!stack) return;
+				const children = Array.from(stack.children);
+				const panes = children.filter((node) => !node.classList.contains("dsv-resizer"));
+				if (!panes[index] || !panes[index + 1]) return;
+				const axis = orientation === "row" ? "width" : "height";
+				const extent = stack.getBoundingClientRect()[axis] - children.filter((node) => node.classList.contains("dsv-resizer")).reduce((sum, node) => sum + node.getBoundingClientRect()[axis], 0);
+				if (!(extent > 0)) return;
+				const rect = event.currentTarget.getBoundingClientRect();
+				const preview = document.createElement("div");
+				preview.className = "dsv-resize-preview";
+				preview.setAttribute("aria-hidden", "true");
+				preview.setAttribute("data-axis", orientation);
+				Object.assign(preview.style, { left: rect.left + "px", top: rect.top + "px", width: rect.width + "px", height: rect.height + "px" });
+				document.body.appendChild(preview);
 				event.preventDefault();
 				event.stopPropagation();
 				try {
@@ -1096,27 +1419,40 @@ window.__ModuleLoader__.load({
 				} catch (error) {
 					/* capture unsupported */
 				}
-				dragRef.current = { base: sizes.slice(), pos: orientation === "row" ? event.clientX : event.clientY };
+				dragRef.current = { base: sizes.slice(), next: sizes.slice(), pos: orientation === "row" ? event.clientX : event.clientY, delta: 0, extent, preview, stack };
+				stack.setAttribute("data-dsv-resizing", orientation);
 			};
 
 			const onPointerMove = (event) => {
 				const drag = dragRef.current;
 				if (!drag) return;
-				const delta = (orientation === "row" ? event.clientX : event.clientY) - drag.pos;
+				drag.delta = (orientation === "row" ? event.clientX : event.clientY) - drag.pos;
 				if (frameRef.current !== 0) return;
 				frameRef.current = requestAnimationFrame(() => {
 					frameRef.current = 0;
-					applyDelta(delta);
+					if (dragRef.current) applyDelta(dragRef.current.delta);
 				});
 			};
 
-			const finish = () => {
+			const finish = (event, commit) => {
+				const drag = dragRef.current;
+				if (drag) {
+					if (commit) {
+						if (event) drag.delta = (orientation === "row" ? event.clientX : event.clientY) - drag.pos;
+						applyDelta(drag.delta);
+					}
+					drag.preview.remove();
+					drag.stack.removeAttribute("data-dsv-resizing");
+				}
 				dragRef.current = null;
 				if (frameRef.current !== 0) {
 					cancelAnimationFrame(frameRef.current);
 					frameRef.current = 0;
 				}
+				if (drag && commit && drag.next.some((size, i) => size !== drag.base[i])) store.actions.setSizes(splitId, drag.next);
 			};
+
+			React.useEffect(() => () => finish(null, false), []);
 
 			return h("div", {
 				className: "dsv-resizer",
@@ -1124,9 +1460,9 @@ window.__ModuleLoader__.load({
 				"aria-orientation": orientation === "row" ? "vertical" : "horizontal",
 				onPointerDown,
 				onPointerMove,
-				onPointerUp: finish,
-				onPointerCancel: finish,
-				onLostPointerCapture: finish,
+				onPointerUp: (event) => finish(event, true),
+				onPointerCancel: () => finish(null, false),
+				onLostPointerCapture: () => finish(null, false),
 			});
 		}
 		//#endregion
@@ -1228,19 +1564,163 @@ window.__ModuleLoader__.load({
 		 * pane renders the shipped conversation through `splitview.pane`, so this
 		 * component only arranges boxes and tabs.
 		 */
+		function TakeoverSeat() {
+			return h("div", { className: "dsv-seat", "data-dsv-seat": "" });
+		}
+
+		/** Keep conversation trees in a root-scoped slot. The host's main slot
+		 * remounts on each session change; it owns only the measured empty seat.
+		 * A fixed surface also keeps pointer capture alive during a pane drag. */
+		function StableTakeover(props) {
+			const selection = runtime.uiWorkspace && runtime.uiWorkspace.selection;
+			const subscribe = React.useCallback((fn) => selection ? selection.subscribe(fn) : currentList().subscribe(fn), [selection]);
+			const getSession = React.useCallback(() => selection ? selection.getSnapshot().sessionId : mainViewSession(), [selection]);
+			const mainSessionId = React.useSyncExternalStore(subscribe, getSession, getSession);
+			const [bounds, setBounds] = React.useState(null);
+			React.useLayoutEffect(() => {
+				let seat = null, frame = 0;
+				const resize = new ResizeObserver(() => queue());
+				const measure = () => {
+					frame = 0;
+					const nextSeat = document.querySelector("[data-dsv-seat]");
+					if (nextSeat !== seat) {
+						resize.disconnect(); seat = nextSeat;
+						if (seat) resize.observe(seat);
+					}
+					const rect = seat && seat.getBoundingClientRect();
+					const next = rect && rect.width > 0 && rect.height > 0 ? { left: rect.left, top: rect.top, width: rect.width, height: rect.height } : null;
+					setBounds((previous) => previous && next && Object.keys(next).every((key) => previous[key] === next[key]) ? previous : next);
+				};
+				const queue = () => { if (!frame) frame = requestAnimationFrame(measure); };
+				const observer = new MutationObserver(queue);
+				observer.observe(document.body, { childList: true, subtree: true });
+				window.addEventListener("resize", queue);
+				measure();
+				return () => { observer.disconnect(); resize.disconnect(); cancelAnimationFrame(frame); window.removeEventListener("resize", queue); };
+			}, []);
+			return h("div", {
+				className: "dsv-surface",
+				style: bounds ? { ...bounds, visibility: "visible" } : { visibility: "hidden", left: 0, top: 0, width: 0, height: 0 },
+			}, h(Takeover, { ...props, sessionId: mainSessionId }));
+		}
+
+		/** Keep horizontal navigation local to the strip; never scroll the page. */
+		function WorkspaceTabs({ children, activeKey }) {
+			const viewport = React.useRef(null);
+			const [edges, setEdges] = React.useState({ left: false, right: false });
+			const measure = React.useCallback((reveal) => {
+				const node = viewport.current;
+				if (!node) return;
+				const selected = reveal && node.querySelector('[aria-selected="true"]');
+				if (selected) {
+					const outer = node.getBoundingClientRect(), inner = selected.getBoundingClientRect();
+					if (inner.left < outer.left) node.scrollLeft += inner.left - outer.left;
+					else if (inner.right > outer.right) node.scrollLeft += inner.right - outer.right;
+				}
+				const next = { left: node.scrollLeft > 1, right: node.scrollLeft + node.clientWidth < node.scrollWidth - 1 };
+				setEdges((previous) => previous.left === next.left && previous.right === next.right ? previous : next);
+			}, []);
+			React.useEffect(() => {
+				const node = viewport.current;
+				if (!node) return;
+				const frame = requestAnimationFrame(() => measure(true));
+				const observer = typeof ResizeObserver === "function" ? new ResizeObserver(() => measure(true)) : null;
+				if (observer) observer.observe(node);
+				return () => { cancelAnimationFrame(frame); if (observer) observer.disconnect(); };
+			}, [activeKey, measure]);
+			const scrollButton = (direction) => h("button", {
+				type: "button", className: "dsv-tabscroll", disabled: !edges[direction],
+				title: runtime.t(direction === "left" ? "scrollTabsLeft" : "scrollTabsRight"),
+				"aria-label": runtime.t(direction === "left" ? "scrollTabsLeft" : "scrollTabsRight"),
+				onClick: () => viewport.current.scrollBy({ left: (direction === "left" ? -1 : 1) * Math.max(160, viewport.current.clientWidth * .7) }),
+			}, h("svg", { width: 14, height: 14, viewBox: "0 0 16 16", fill: "none", "aria-hidden": true },
+				h("path", { d: direction === "left" ? "M10 4 6 8l4 4" : "m6 4 4 4-4 4", stroke: "currentColor", strokeWidth: 1.5, strokeLinecap: "round", strokeLinejoin: "round" })));
+			return h("div", { className: "dsv-tabs-viewport" },
+				edges.left || edges.right ? scrollButton("left") : null,
+				h("div", { ref: viewport, className: "dsv-workspace-tabs", onScroll: () => measure(false),
+					onDragOverCapture: (event) => {
+						if (!Array.from(event.dataTransfer ? event.dataTransfer.types : []).includes(TAB_DRAG_TYPE)) return;
+						const node = viewport.current, rect = node.getBoundingClientRect();
+						if (event.clientX < rect.left + 24) node.scrollLeft -= 18;
+						else if (event.clientX > rect.right - 24) node.scrollLeft += 18;
+					},
+				}, children),
+				edges.left || edges.right ? scrollButton("right") : null);
+		}
+
 		function Takeover(props) {
 			const { renderSlot, SessionProvider, sessionId: mainSessionId } = props;
 			const t = runtime.t;
 			const snap = useLayout();
 			const list = useSessionList();
 			const groups = React.useMemo(() => listGroups(snap.root), [snap.root]);
+			// The host owns one input editor per session. Do not let a hidden
+			// duplicate attach that editor away from a visible conversation.
+			const mountedTabs = new Set(groups.map((group) => group.activeTabId));
+			const mountedSessions = new Set(groups.flatMap((group) => group.tabs.filter((tab) => tab.id === group.activeTabId).map((tab) => tab.sessionId)));
+			for (const group of groups) for (const tab of group.tabs) {
+				if (!tab.sessionId || mountedSessions.has(tab.sessionId)) continue;
+				mountedTabs.add(tab.id);
+				mountedSessions.add(tab.sessionId);
+			}
 			const [menu, setMenu] = React.useState(null);
 			const [drop, setDrop] = React.useState(null);
 			const [insertAt, setInsertAt] = React.useState(null);
+			const layoutRef = React.useRef(null);
+			const [paneBounds, setPaneBounds] = React.useState({});
 			const dragTabRef = React.useRef(null);
 			const dropRef = React.useRef(null);
 			const splitRefs = React.useRef(new Map());
-			const bridged = React.useRef(null);
+			const observedHost = React.useRef(mainSessionId);
+			const requestedSession = React.useRef(null);
+			const initialSelection = React.useRef(true);
+			const keyboardFocus = React.useRef(false);
+
+			// Flex seats arrange the split tree. Conversation groups remain keyed
+			// siblings in one layer, so changing tree ancestry cannot remount them.
+			React.useLayoutEffect(() => {
+				const layout = layoutRef.current;
+				if (!layout) return;
+				const measure = () => {
+					const outer = layout.getBoundingClientRect(), next = {};
+					for (const seat of layout.querySelectorAll("[data-dsv-group-seat]")) {
+						const rect = seat.getBoundingClientRect();
+						next[seat.dataset.dsvGroupSeat] = { left: rect.left - outer.left, top: rect.top - outer.top, width: rect.width, height: rect.height };
+					}
+					setPaneBounds((previous) => Object.keys(previous).length === Object.keys(next).length && Object.keys(next).every((id) => previous[id] && Object.keys(next[id]).every((key) => previous[id][key] === next[id][key])) ? previous : next);
+				};
+				measure();
+				const observer = new ResizeObserver(measure);
+				observer.observe(layout);
+				for (const seat of layout.querySelectorAll("[data-dsv-group-seat]")) observer.observe(seat);
+				return () => observer.disconnect();
+			}, [snap.root]);
+
+			// Embedded composers autofocus when their session mounts. Focus by
+			// itself is not user intent: mirroring it into mainView remounts the
+			// other composer, which focuses back and starts an endless ping-pong.
+			// Pointer input selects a pane directly; only Tab navigation may use
+			// a subsequent focus event to select one.
+			React.useEffect(() => {
+				const onKey = (event) => { keyboardFocus.current = event.key === "Tab"; };
+				const onPointer = () => { keyboardFocus.current = false; };
+				const onDragEnd = () => {
+					dragTabRef.current = null;
+					dropRef.current = null;
+					setDrop(null);
+					setInsertAt(null);
+				};
+				document.addEventListener("keydown", onKey, true);
+				document.addEventListener("keyup", onPointer, true);
+				document.addEventListener("pointerdown", onPointer, true);
+				document.addEventListener("dragend", onDragEnd, true);
+				return () => {
+					document.removeEventListener("keydown", onKey, true);
+					document.removeEventListener("keyup", onPointer, true);
+					document.removeEventListener("pointerdown", onPointer, true);
+					document.removeEventListener("dragend", onDragEnd, true);
+				};
+			}, []);
 
 			const sessionIds = React.useMemo(() => {
 				const ids = [];
@@ -1259,47 +1739,65 @@ window.__ModuleLoader__.load({
 			// Retry failed retains once the projected list changes: a restored
 			// layout is read from localStorage before the session list arrives,
 			// so the first retain legitimately fails with "unknown session".
-			const listRevision = list && list.ids ? list.ids.length : 0;
-			const held = useHeldReferences(sessionIds, listRevision);
+			const listRevision = sessionIds.filter((id) => list && list.byId && list.byId[id]).sort().join("|");
+			const { entries: held, retry: retrySession } = useHeldReferences(sessionIds, listRevision);
 
 			const activeGroup = groups.find((group) => group.id === snap.activeGroupId) || groups[0];
 			const activeTab = activeGroup ? activeGroup.tabs.find((tab) => tab.id === activeGroup.activeTabId) || activeGroup.tabs[0] : undefined;
 			const activeSession = activeTab && activeTab.sessionId ? activeTab.sessionId : undefined;
 
-			// A pane tab only becomes "current" once its session is known to the
-			// host. Without this guard a restored layout pushes a stale id into
-			// uiWorkspace.openSession on the very first render and throws.
-			const known = React.useCallback((id) => Boolean(list && list.byId && list.byId[id]), [list]);
+			const activeKnown = Boolean(list && list.byId && list.byId[activeSession]);
 
-			// mainView -> tree: a session opened from the sidebar lands in the active pane.
+			// Resolve both directions in one commit. After a sidebar change, do
+			// not push this render's stale activeSession back into the workspace.
+			// A request is pending only until acknowledged, never a permanent
+			// "already seen" latch (A -> B -> A must still open A).
 			React.useEffect(() => {
-				if (typeof mainSessionId !== "string") return;
-				if (bridged.current === mainSessionId) return;
-				bridged.current = mainSessionId;
-				store.actions.adoptSession(mainSessionId);
-			}, [mainSessionId]);
-
-			// tree -> mainView: focusing a pane makes its session the app's current one.
-			React.useEffect(() => {
-				if (!activeSession) return;
-				if (bridged.current === activeSession) return;
-				if (!known(activeSession)) return;
-				bridged.current = activeSession;
+				if (initialSelection.current) {
+					const hostChanged = observedHost.current !== mainSessionId;
+					observedHost.current = mainSessionId;
+					if (activeSession) {
+						if (!activeKnown) return;
+						if (activeSession !== mainSessionId) {
+							if (requestedSession.current !== activeSession || hostChanged) {
+								try { requestedSession.current = activeSession; runtime.uiWorkspace?.openSession(activeSession); }
+								catch (error) { requestedSession.current = null; }
+							}
+							return;
+						}
+					} else if (typeof mainSessionId === "string") store.actions.adoptSession(mainSessionId);
+					initialSelection.current = false;
+					requestedSession.current = null;
+					return;
+				}
+				if (observedHost.current !== mainSessionId) {
+					observedHost.current = mainSessionId;
+					const echo = requestedSession.current === mainSessionId;
+					requestedSession.current = null;
+					if (!echo && typeof mainSessionId === "string") {
+						store.actions.adoptSession(mainSessionId);
+						return;
+					}
+				}
+				if (activeSession === mainSessionId) {
+					requestedSession.current = null;
+					return;
+				}
+				if (!activeSession || !activeKnown || requestedSession.current === activeSession) return;
 				const workspace = runtime.uiWorkspace;
 				if (workspace && typeof workspace.openSession === "function") {
 					try {
+						requestedSession.current = activeSession;
 						workspace.openSession(activeSession);
 					} catch (error) {
+						requestedSession.current = null;
 						console.error("[dsh-splitview] openSession failed", error);
 					}
 				}
-			}, [activeSession, known]);
+			}, [mainSessionId, activeSession, activeKnown]);
 
-			const brokenIds = React.useMemo(() => {
-				const set = new Set();
-				for (const [id, entry] of held) if (entry.kind === "failed") set.add(id);
-				return set;
-			}, [held]);
+			const brokenIds = new Set();
+			for (const [id, entry] of held) if (entry.kind === "failed") brokenIds.add(id);
 
 			const rowOf = (id) => (list && list.byId ? list.byId[id] : undefined);
 
@@ -1313,7 +1811,9 @@ window.__ModuleLoader__.load({
 				if (!dragTabRef.current && types.indexOf("text/plain") < 0) return;
 				event.preventDefault();
 				event.stopPropagation();
-				if (event.dataTransfer) event.dataTransfer.dropEffect = dragTabRef.current ? "move" : "copy";
+				// The native sidebar only allows move. Asking for copy cancels the
+				// browser's real drop, even though synthetic drop events still work.
+				if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
 				const zone = zoneOfPoint(event.clientX, event.clientY, event.currentTarget.getBoundingClientRect());
 				const current = dropRef.current;
 				if (!current || current.groupId !== group.id || current.zone !== zone) setDropState({ groupId: group.id, zone });
@@ -1322,13 +1822,13 @@ window.__ModuleLoader__.load({
 			const onPaneDrop = (event, group) => {
 				event.preventDefault();
 				event.stopPropagation();
-				const zone = dropRef.current && dropRef.current.groupId === group.id ? dropRef.current.zone : "center";
+				const zone = zoneOfPoint(event.clientX, event.clientY, event.currentTarget.getBoundingClientRect());
 				setDropState(null);
 				const dragTab = dragTabRef.current;
 				dragTabRef.current = null;
 				if (dragTab) {
 					if (zone === "center") store.actions.moveTab(dragTab.tabId, dragTab.groupId, group.id, group.tabs.length);
-					else store.actions.moveTabToNewGroup(dragTab.tabId, dragTab.groupId, orientationOf(zone));
+					else store.actions.moveTabToNewGroup(dragTab.tabId, dragTab.groupId, orientationOf(zone), positionOf(zone), group.id);
 					return;
 				}
 				let payload = "";
@@ -1348,10 +1848,7 @@ window.__ModuleLoader__.load({
 			};
 
 			const renderTabStrip = (group) => {
-				const barDropAt = (event) => {
-					if (!dragTabRef.current) return;
-					event.preventDefault();
-					event.stopPropagation();
+				const gapAt = (event) => {
 					const tabs = Array.from(event.currentTarget.querySelectorAll(".dsv-tab"));
 					let index = tabs.length;
 					for (let i = 0; i < tabs.length; i += 1) {
@@ -1361,6 +1858,14 @@ window.__ModuleLoader__.load({
 							break;
 						}
 					}
+					return index;
+				};
+				const barDropAt = (event) => {
+					if (!dragTabRef.current) return;
+					event.preventDefault();
+					event.stopPropagation();
+					if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+					const index = gapAt(event);
 					setInsertAt({ groupId: group.id, index });
 					setDropState({ groupId: group.id, zone: "tabbar" });
 				};
@@ -1369,40 +1874,54 @@ window.__ModuleLoader__.load({
 					event.stopPropagation();
 					const drag = dragTabRef.current;
 					dragTabRef.current = null;
-					const spot = insertAt && insertAt.groupId === group.id ? insertAt.index : group.tabs.length;
+					const spot = gapAt(event);
 					setInsertAt(null);
 					setDropState(null);
 					if (!drag) return;
 					store.actions.moveTab(drag.tabId, drag.groupId, group.id, spot);
 				};
 
-				const children = [];
+				const number = groups.indexOf(group) + 1;
+				const children = groups.length > 1 ? [h("span", { key: "number", className: "dsv-group-number", "aria-hidden": true, title: t("paneTabs", { number }) }, number)] : [];
 				group.tabs.forEach((tab, tabIndex) => {
-					if (insertAt && insertAt.groupId === group.id && insertAt.index === tabIndex) {
-						children.push(h("span", { key: "ins-" + tab.id, className: "dsv-ins", style: { left: 0 } }));
-					}
 					const label = tab.sessionId ? titleOf(rowOf(tab.sessionId), tab.sessionId) : t("addTab");
 					children.push(
 						h(
 							"div",
 							{
 								key: tab.id,
+								id: "dsv-tab-" + tab.id, "aria-controls": "dsv-panel-" + tab.id,
 								role: "tab",
-								tabIndex: 0,
-								"aria-selected": group.activeTabId === tab.id,
-								className: "dsv-tab" + (group.activeTabId === tab.id ? " dsv-tab--active" : "") + (tab.sessionId && brokenIds.has(tab.sessionId) ? " dsv-tab--broken" : ""),
+								tabIndex: group.activeTabId === tab.id && snap.activeGroupId === group.id ? 0 : -1,
+								"aria-selected": group.activeTabId === tab.id && snap.activeGroupId === group.id,
+								"data-visible": group.activeTabId === tab.id,
+								"data-dsv-tab": tab.id,
+								"data-insert": insertAt && insertAt.groupId === group.id ? (insertAt.index === tabIndex ? "before" : insertAt.index === group.tabs.length && tabIndex === group.tabs.length - 1 ? "after" : undefined) : undefined,
+								className: "dsv-tab" + (group.activeTabId === tab.id && snap.activeGroupId === group.id ? " dsv-tab--active" : "") + (tab.sessionId && brokenIds.has(tab.sessionId) ? " dsv-tab--broken" : ""),
 								title: label,
 								draggable: true,
-								onClick: () => store.actions.setActiveTab(group.id, tab.id),
+								onClick: () => { store.actions.focusGroup(group.id); store.actions.setActiveTab(group.id, tab.id); },
 								onKeyDown: (event) => {
+									if (event.target !== event.currentTarget) return;
 									if (event.key === "Enter" || event.key === " ") {
 										event.preventDefault();
-										store.actions.setActiveTab(group.id, tab.id);
+										store.actions.focusGroup(group.id); store.actions.setActiveTab(group.id, tab.id);
+									} else if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
+										event.preventDefault();
+										const tabs = Array.from(event.currentTarget.closest(".dsv-workspace-tabs").querySelectorAll(".dsv-tab"));
+										const index = tabs.indexOf(event.currentTarget);
+										const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+										tabs[next].focus(); tabs[next].click();
+									} else if (event.key === "Delete") {
+										event.preventDefault(); store.actions.closeTab(group.id, tab.id);
+										requestAnimationFrame(() => document.querySelector('.dsv-workspace-tabs [aria-selected="true"]')?.focus());
 									}
 								},
+								onAuxClick: (event) => { if (event.button === 1) { event.preventDefault(); store.actions.closeTab(group.id, tab.id); } },
 								onContextMenu: (event) => {
 									event.preventDefault();
 									event.stopPropagation();
+									store.actions.focusGroup(group.id);
 									store.actions.setActiveTab(group.id, tab.id);
 									setMenu({ x: event.clientX, y: event.clientY, groupId: group.id, tabId: tab.id });
 								},
@@ -1428,45 +1947,26 @@ window.__ModuleLoader__.load({
 								{
 									type: "button",
 									className: "dsv-tab__close",
-									title: t("closeTab"),
+									title: t("closeTab"), "aria-label": t("closeNamedTab", { name: label }), tabIndex: -1, draggable: false,
+									onDragStart: (event) => { event.preventDefault(); event.stopPropagation(); },
 									onClick: (event) => {
 										event.stopPropagation();
 										store.actions.closeTab(group.id, tab.id);
 									},
 								},
-								"✕",
+								h("svg", { width: 12, height: 12, viewBox: "0 0 16 16", fill: "none", "aria-hidden": true }, h("path", { d: "m4 4 8 8m0-8-8 8", stroke: "currentColor", strokeWidth: 1.5, strokeLinecap: "round" })),
 							),
 						),
 					);
 				});
-				if (insertAt && insertAt.groupId === group.id && insertAt.index >= group.tabs.length) {
-					children.push(h("span", { key: "ins-end", className: "dsv-ins", style: { right: 2 } }));
-				}
-				children.push(h("button", { key: "add", type: "button", className: "dsv-tabbar__add", title: t("addTab"), onClick: () => store.actions.addTab(group.id) }, "＋"));
-				children.push(
-					h(
-						"button",
-						{
-							key: "menu",
-							type: "button",
-							className: "dsv-tabbar__menu",
-							title: t("paneMenu"),
-							onClick: (event) => {
-								const tab = group.tabs.find((item) => item.id === group.activeTabId) || group.tabs[0];
-								if (!tab) return;
-								const box = event.currentTarget.getBoundingClientRect();
-								setMenu({ x: box.left, y: box.bottom + 4, groupId: group.id, tabId: tab.id });
-							},
-						},
-						"⋯",
-					),
-				);
 
 				return h(
 					"div",
 					{
-						className: "dsv-tabbar",
+						className: "dsv-tabbar", "data-active": snap.activeGroupId === group.id, "data-dsv-tab-group": group.id,
+						key: group.id,
 						role: "tablist",
+						"aria-label": t("paneTabs", { number: groups.indexOf(group) + 1 }),
 						onDragOver: barDropAt,
 						onDrop: barDropCommit,
 						onDragLeave: (event) => {
@@ -1478,8 +1978,7 @@ window.__ModuleLoader__.load({
 				);
 			};
 
-			const renderBody = (group) => {
-				const tab = group.tabs.find((item) => item.id === group.activeTabId) || group.tabs[0];
+			const renderBody = (group, tab) => {
 				if (!tab) return h("div", { className: "dsv-empty" }, t("emptyPickerHint"));
 				if (!tab.sessionId) {
 					return h(SessionPicker, {
@@ -1493,9 +1992,11 @@ window.__ModuleLoader__.load({
 				return h(
 					SessionHost,
 					{
+						key: tab.sessionId,
 						status: status || { kind: "missing" },
 						SessionProvider,
-						onRetry: () => store.actions.closeTab(group.id, tab.id),
+						onRetry: () => retrySession(tab.sessionId),
+						onChoose: () => store.actions.setSession(group.id, tab.id, null),
 					},
 					renderSlot("splitview.pane", { groupId: group.id, tabId: tab.id }, { only: "body" }),
 				);
@@ -1510,20 +2011,26 @@ window.__ModuleLoader__.load({
 						key: group.id,
 						className: "dsv-group" + (isActive ? " dsv-group--active" : "") + (zone && zone !== "center" ? " dsv-group--drop" : ""),
 						"data-dsv-group": group.id,
-						style: { flexGrow: 1, flexShrink: 1, flexBasis: 0 },
-						onMouseDownCapture: () => store.actions.focusGroup(group.id),
-						onFocusCapture: () => store.actions.focusGroup(group.id),
+						style: { position: "absolute", ...(paneBounds[group.id] || {}), visibility: paneBounds[group.id] ? "visible" : "hidden" },
+						onPointerDownCapture: () => store.actions.focusGroup(group.id),
+						onFocusCapture: () => {
+							if (!keyboardFocus.current) return;
+							keyboardFocus.current = false;
+							store.actions.focusGroup(group.id);
+						},
 						onDragOver: (event) => onPaneDragOver(event, group),
 						onDrop: (event) => onPaneDrop(event, group),
 					},
-					renderTabStrip(group),
-					h("div", { className: "dsv-body" }, renderBody(group)),
+					h("div", { className: "dsv-body" }, group.tabs.map((tab) => h(ReadingTab, {
+						key: tab.id, tab, active: tab.id === group.activeTabId,
+						hidden: tab.id !== group.activeTabId, "data-dsv-tab-body": tab.id,
+					}, mountedTabs.has(tab.id) ? renderBody(group, tab) : null))),
 					zone ? h("div", { className: "dsv-drop", "data-zone": zone }) : null,
 				);
 			};
 
 			const renderNode = (node) => {
-				if (node.type === "group") return renderGroup(node);
+				if (node.type === "group") return h("div", { key: node.id, className: "dsv-pane-seat", "data-dsv-group-seat": node.id, style: { flexGrow: 1, flexShrink: 1, flexBasis: 0 } });
 				let stack = splitRefs.current.get(node.id);
 				if (!stack) {
 					stack = React.createRef();
@@ -1531,7 +2038,10 @@ window.__ModuleLoader__.load({
 				}
 				const pieces = [];
 				node.children.forEach((child, index) => {
-					pieces.push(renderNode(child));
+					const rendered = renderNode(child);
+					pieces.push(React.cloneElement(rendered, {
+						style: { ...rendered.props.style, flexGrow: node.sizes[index], flexShrink: 1, flexBasis: 0 },
+					}));
 					if (index < node.children.length - 1) {
 						pieces.push(
 							h(Resizer, {
@@ -1554,7 +2064,19 @@ window.__ModuleLoader__.load({
 			return h(
 				"div",
 				{ className: "dsv-root", "data-panes": groups.length },
-				h("div", { className: "dsv-node", "data-orientation": "row" }, renderNode(snap.root)),
+				h("div", { className: "dsv-workspace-bar" },
+					h(WorkspaceTabs, { activeKey: snap.activeGroupId + ":" + groups.map((group) => group.activeTabId + ":" + group.tabs.map((tab) => tab.id).join(",")).join("|") }, groups.map(renderTabStrip)),
+					h("div", { className: "dsv-workspace-actions" },
+						h("button", { type: "button", title: t("addTab"), "aria-label": t("addTab"), onClick: () => store.actions.addTab(snap.activeGroupId) }, "＋"),
+						h("button", { type: "button", title: t("splitRight"), "aria-label": t("splitRight"), onClick: () => splitActive("row") }, h(IconSplit)),
+						h("button", { type: "button", title: t("paneMenu"), "aria-label": t("paneMenu"), onClick: (event) => {
+							if (!activeGroup || !activeTab) return;
+							const box = event.currentTarget.getBoundingClientRect();
+							setMenu({ x: box.left, y: box.bottom + 4, groupId: activeGroup.id, tabId: activeTab.id });
+						} }, "⋯"))),
+				h("div", { ref: layoutRef, className: "dsv-layout" },
+					h("div", { className: "dsv-node", "data-orientation": "row" }, renderNode(snap.root)),
+					h("div", { className: "dsv-pane-layer" }, groups.map(renderGroup))),
 				menuGroup && menuTab ? h(TabMenu, { x: menu.x, y: menu.y, group: menuGroup, tab: menuTab, onClose: () => setMenu(null) }) : null,
 			);
 		}
@@ -1564,10 +2086,8 @@ window.__ModuleLoader__.load({
 		/**
 		 * "Drag a session onto the conversation to split there."
 		 *
-		 * Installed by apply(), not by a component. The gesture matters most in the
-		 * single-pane case — that is when the shipped conversation owns the screen —
-		 * and hanging the listener off an overlay entry made the whole feature
-		 * silently dead whenever that entry was not mounted. The drop zone is painted
+		 * Installed by apply(), so the gesture also works while the workspace overlay
+		 * is mounting or handing control back to the host. The drop zone is painted
 		 * by stamping `data-dsv-drop` on the region element, so the hint needs no
 		 * extra DOM and no extra React tree either.
 		 */
@@ -1728,6 +2248,8 @@ window.__ModuleLoader__.load({
 		const MESSAGES = {
 			zh: {
 				panel: "分屏视图",
+				paneTabs: "窗格 {number} 的会话标签",
+				scrollTabsLeft: "向左滚动标签", scrollTabsRight: "向右滚动标签", closeNamedTab: "关闭标签：{name}",
 				closeTab: "关闭标签",
 				closeOthers: "关闭其他标签",
 				closeRight: "关闭右侧标签",
@@ -1739,7 +2261,9 @@ window.__ModuleLoader__.load({
 				pickerSearch: "搜索标题或工作目录",
 				emptyPickerHint: "选一个会话放进这个窗格，或从左侧栏把会话拖进来。",
 				loading: "正在打开会话…",
-				failedSession: "该会话已不可用",
+				failedSession: "会话加载失败",
+				retrySession: "重试加载",
+				loadTimeout: "加载超过 30 秒，可以重试或更换会话。",
 				pickAnother: "换一个会话",
 				splitHere: "向右拆分，把这个会话放到新窗格",
 				conversationUnavailable: "对话视图暂时不可用",
@@ -1759,6 +2283,8 @@ window.__ModuleLoader__.load({
 			},
 			en: {
 				panel: "Split View",
+				paneTabs: "Session tabs for pane {number}",
+				scrollTabsLeft: "Scroll tabs left", scrollTabsRight: "Scroll tabs right", closeNamedTab: "Close tab: {name}",
 				closeTab: "Close tab",
 				closeOthers: "Close other tabs",
 				closeRight: "Close tabs to the right",
@@ -1770,7 +2296,9 @@ window.__ModuleLoader__.load({
 				pickerSearch: "Search title or working directory",
 				emptyPickerHint: "Pick a session for this pane, or drag one in from the sidebar.",
 				loading: "Opening session…",
-				failedSession: "This session is no longer available",
+				failedSession: "Could not load this session",
+				retrySession: "Retry loading",
+				loadTimeout: "Loading took more than 30 seconds. Retry or choose another session.",
 				pickAnother: "Pick another session",
 				splitHere: "Split right with this session",
 				conversationUnavailable: "The conversation view is unavailable",
@@ -1861,27 +2389,36 @@ window.__ModuleLoader__.load({
 		const installer = {
 			ctx: null,
 			dispose: null,
+			syncing: false,
+			wanted: null,
 			isInstalled() {
 				return typeof this.dispose === "function";
 			},
 			install() {
 				if (!this.ctx || this.isInstalled()) return;
 				const ctx = this.ctx;
-				this.dispose = ctx.slots.inject("main.conversation", function* () {
-					yield ctx.slots.register(
-						{
-							name: "main.conversation",
-							priority: -1,
-							locale: NS,
-							children: { "splitview.pane": { kind: "list", scope: "session" } },
-						},
-						Takeover,
-					);
-				});
+				const disposers = [];
+				try {
+					disposers.push(ctx.slots.inject("shell.overlay", () => ctx.slots.register({
+						name: "shell.overlay", id: NS, locale: NS,
+						children: { "splitview.pane": { kind: "list", scope: "session" } },
+					}, StableTakeover)));
+					disposers.push(ctx.slots.inject("main.conversation", () => ctx.slots.register({
+						name: "main.conversation", priority: -1,
+					}, TakeoverSeat)));
+					this.dispose = () => { for (const dispose of disposers.reverse()) dispose(); };
+				} catch (error) {
+					for (const dispose of disposers.reverse()) dispose();
+					throw error;
+				}
 			},
 			uninstall() {
 				const dispose = this.dispose;
 				this.dispose = null;
+				// `wanted` records the state we last applied, so an uninstall from
+				// anywhere (settings toggle, last pane closed, effect cleanup) must
+				// clear it or the next sync would think the takeover is still up.
+				this.wanted = false;
 				if (typeof dispose === "function") {
 					try {
 						dispose();
@@ -1889,14 +2426,34 @@ window.__ModuleLoader__.load({
 						console.error("[dsh-splitview] uninstall failed", error);
 					}
 				}
+				// A drop in flight leaves its hint attribute on the pane under the
+				// cursor; that veil must not outlive the takeover it belonged to.
+				try {
+					for (const node of document.querySelectorAll("[data-dsv-drop]")) node.removeAttribute("data-dsv-drop");
+				} catch (error) {
+					/* no document: nothing to clean */
+				}
 			},
-			/** Take over exactly while there is more than one pane to show. */
+			/** Keep the same tab workspace in both single and split layouts. */
 			sync() {
+				if (!this.ctx || this.syncing) return;
 				const snap = store.getSnapshot();
-				const groups = countGroups(snap.root);
-				const wanted = snap.enabled && groups > 1;
-				if (wanted && !this.isInstalled()) this.install();
-				else if (!wanted && this.isInstalled()) this.uninstall();
+				const wanted = snap.enabled;
+				if (this.wanted === wanted) return;
+				this.wanted = wanted;
+				this.syncing = true;
+				try {
+					if (wanted) this.install();
+					else this.uninstall();
+				} catch (error) {
+					// A failed install must not pin `wanted`: leaving it set makes
+					// every later notify short-circuit and the takeover could then
+					// never be retried or handed back without a reload.
+					this.wanted = null;
+					console.error("[dsh-splitview] takeover sync failed", error);
+				} finally {
+					this.syncing = false;
+				}
 			},
 		};
 		//#endregion
@@ -1918,6 +2475,12 @@ window.__ModuleLoader__.load({
 
 		function applyInner(ctx) {
 			installStyles();
+			ctx.effect(() => {
+				const onHidden = () => { if (document.visibilityState === "hidden") persistWorkspace(); };
+				window.addEventListener("pagehide", persistWorkspace);
+				document.addEventListener("visibilitychange", onHidden);
+				return () => { window.removeEventListener("pagehide", persistWorkspace); document.removeEventListener("visibilitychange", onHidden); persistWorkspace(); };
+			}, "dsh-splitview: workspace persistence");
 			runtime.ctx = ctx;
 			runtime.sessions = ctx.sessions || null;
 			try {
@@ -1940,9 +2503,12 @@ window.__ModuleLoader__.load({
 			// The pane body is its own list entry so the renderer scopes it to the
 			// pane's session (that is where `renderslot("splitview.pane")` lands).
 			ctx.effect(
-				() => ctx.slots.inject("splitview.pane", () => ctx.slots.register({ name: "splitview.pane", id: "body", locale: NS }, PaneBody)),
+				() => ctx.slots.inject("splitview.pane", () => ctx.slots.register({ name: "splitview.pane", id: "body", locale: NS,
+					children: { "splitview.hostHeader": { kind: "single", scope: "session" }, "splitview.hostSession": { kind: "single", scope: "session" } },
+				}, PaneBody)),
 				"dsh-splitview: pane body",
 			);
+			ctx.effect(() => installNativeHeader(ctx), "dsh-splitview: native header bridge");
 
 			// Entry point where the user already is: the session header.
 			ctx.effect(
@@ -2026,8 +2592,7 @@ window.__ModuleLoader__.load({
 				};
 			}, "dsh-splitview: shortcuts");
 
-			// Keep the takeover in step with the tree: installed exactly while more
-			// than one pane is on screen.
+			// Keep the same workspace installed for single and split layouts.
 			ctx.effect(() => {
 				const off = store.subscribe(() => installer.sync());
 				installer.sync();
