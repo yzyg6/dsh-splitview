@@ -2,9 +2,9 @@
 
 让多个 DSH 对话并排展开，把来回切换变成同时推进。
 
-[![DSH 原生实录：拖拽分屏、横向标签与刷新恢复](promo/dsh-splitview-native-cover.png)](https://github.com/yzyg6/dsh-splitview/blob/main/promo/dsh-splitview-native-1080p.mp4)
+![DSH 原生实录：拖拽分屏、横向标签与刷新恢复](promo/dsh-splitview-preview.gif)
 
-**[▶ 观看 30 秒演示](https://github.com/yzyg6/dsh-splitview/blob/main/promo/dsh-splitview-native-1080p.mp4)** · [下载视频](https://github.com/yzyg6/dsh-splitview/releases/download/v0.2.0/dsh-splitview-native-1080p.mp4) · [下载插件](https://github.com/yzyg6/dsh-splitview/releases/latest)
+**[下载 30 秒完整视频](https://github.com/yzyg6/dsh-splitview/releases/download/v0.2.0/dsh-splitview-native-1080p.mp4)** · [下载封面](https://github.com/yzyg6/dsh-splitview/releases/download/v0.2.0/dsh-splitview-native-cover.png) · [下载插件](https://github.com/yzyg6/dsh-splitview/releases/latest)
 
 实录使用专用演示会话，带中文字幕。
 
