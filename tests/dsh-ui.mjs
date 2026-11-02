@@ -51,7 +51,13 @@ const addTab = async (title) => {
   return id;
 };
 const mouseClick = async (selector, button = 'left') => {
+  await run(selector => {
+    const element = document.querySelector(selector);
+    (element.closest('[data-dsv-tab]') || element).scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, selector);
+  await wait(100);
   const p = await run(selector => { const r = document.querySelector(selector).getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }, selector);
+  await call('Input.dispatchMouseEvent', { type: 'mouseMoved', ...p, button: 'none' });
   await call('Input.dispatchMouseEvent', { type: 'mousePressed', ...p, button, clickCount: 1 });
   await call('Input.dispatchMouseEvent', { type: 'mouseReleased', ...p, button, clickCount: 1 }); await wait(200);
 };
@@ -94,9 +100,14 @@ try {
     if (original.panes >= (savedLayout.maxPanes || 4)) throw new Error('One free pane is required for UI tests');
     const roots = [...document.querySelectorAll('.dsv-tabbody:not([hidden]) [data-conversation-content]')];
     const scrolls = [...document.querySelectorAll('.dsv-tabbody:not([hidden]) [data-conversation-scroll]')].map(node => ({ node, top: node.scrollTop }));
-    const test = window.__dsvTabQA = { original, roots, scrolls, events: [], errors: [] };
+    const test = window.__dsvTabQA = { original, roots, scrolls, events: [], errors: [], resizeNotifications: [] };
     test.onDrop = e => { if (e.isTrusted) setTimeout(() => test.events.push({ allowed: e.dataTransfer.effectAllowed, effect: e.dataTransfer.dropEffect, accepted: e.defaultPrevented }), 0); };
-    test.onError = e => test.errors.push(e.message);
+    test.onError = e => {
+      // Chromium reports deferred ResizeObserver delivery as an ErrorEvent
+      // without an exception. Keep those visible and verify they settle below.
+      if (!e.error && e.message === 'ResizeObserver loop completed with undelivered notifications.') test.resizeNotifications.push(e.message);
+      else test.errors.push(e.message);
+    };
     document.addEventListener('drop', test.onDrop, true); window.addEventListener('error', test.onError);
     return original;
   });
@@ -213,7 +224,11 @@ try {
   check('cancelled drag removes all insertion and split previews', await run(() => !document.querySelector('.dsv-tab[data-insert],.dsv-drop')));
   const evidence = await run(() => ({ events: window.__dsvTabQA.events, errors: window.__dsvTabQA.errors }));
   check('Chromium accepted move-only native drops', evidence.events.length >= 7 && evidence.events.every(e => e.allowed === 'move' && e.effect === 'move' && e.accepted));
+  assert.deepEqual(evidence.errors, [], 'Captured host JavaScript errors');
   check('no host rendering or JavaScript errors', evidence.errors.length === 0 && (await state()).errors.length === 0);
+  const notifications = await run(() => window.__dsvTabQA.resizeNotifications.length);
+  await wait(350);
+  check('layout observer notifications settle after resizing', await run(n => window.__dsvTabQA.resizeNotifications.length === n, notifications));
 } finally {
   if (baseline) {
     await run(() => {

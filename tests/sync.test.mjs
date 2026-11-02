@@ -32,7 +32,7 @@ function harness() {
     useSyncExternalStore(subscribe, get) { return get(); },
   };
   let source = readFileSync(new URL("../client.js", import.meta.url), "utf8");
-  source = source.replace("return module.exports;", "return { Takeover, store, runtime, installer, listGroups, useReferenceReady, useHeldReferences, createReadingMemory, captureReading, restoreReading, Resizer, PaneBody, installNativeHeader, nativeSlotName, WorkspaceTabs, createStore, readingMemory, readingCaptures, persistWorkspace, loadReadingHistory, createNativeReadingStore };");
+  source = source.replace("return module.exports;", "return { Takeover, store, runtime, installer, listGroups, useReferenceReady, useHeldReferences, createReadingMemory, captureReading, restoreReading, Resizer, PaneBody, installNativeHeader, nativeSlotName, WorkspaceTabs, createStore, readingMemory, readingCaptures, persistWorkspace, loadReadingHistory, createNativeReadingStore, installGlobalDrop, PaneAttachments, PaneContext, fileDropTarget };");
   const documentListeners = new Map();
   const timers = new Map();
   const frames = new Map();
@@ -69,7 +69,7 @@ function harness() {
   const right = api.store.actions.splitGroup(left, "row", "after", "B");
   api.store.actions.focusGroup(left);
   return {
-    ...api, left, right, list, writes, documentListeners, createdNodes, storage,
+    ...api, left, right, list, writes, documentListeners, createdNodes, storage, document: context.document,
     runTimers(delay) { for (const [id, timer] of [...timers]) if (timer.delay === delay) { timers.delete(id); timer.fn(); } },
     runFrames() { for (const [id, fn] of [...frames]) { frames.delete(id); fn(); } },
     component(Component, props) {
@@ -471,6 +471,111 @@ test("ending a sidebar drag without a drop removes the pane preview", () => {
   assert.match(groupElement(h.render("A"), h.left).props.className, /dsv-group--drop/);
   h.documentListeners.get("dragend")?.();
   assert.doesNotMatch(groupElement(h.render("A"), h.left).props.className, /dsv-group--drop/);
+});
+
+for (const types of [["Files"], ["Files", "text/plain", "text/uri-list"]]) {
+  test(`file drops reach the native attachment handler and dismiss its overlay (${types.join(", ")})`, () => {
+    const h = harness(), pane = groupElement(h.render("A"), h.left);
+    const before = JSON.stringify(h.store.getSnapshot());
+    let overlayVisible = true, stopped = false, prevented = false, attached = 0;
+    const event = {
+      dataTransfer: { types, files: [{ name: "attachment.txt" }], items: [{ kind: "file" }],
+        dropEffect: "copy", getData: () => "C" },
+      clientX: 990, clientY: 300,
+      currentTarget: { getBoundingClientRect: () => ({ left: 0, top: 0, width: 1000, height: 600 }) },
+      preventDefault() { prevented = true; }, stopPropagation() { stopped = true; },
+    };
+    pane.props.onDragOver(event);
+    pane.props.onDrop(event);
+    // DSH's document-level upload listener must receive the bubbling drop.
+    if (!stopped) { overlayVisible = false; attached++; }
+    assert.equal(overlayVisible, false, "native file-drop overlay must not remain stuck");
+    assert.equal(attached, 1, "native attachment handler must receive the file");
+    assert.equal(prevented, false, "workspace must not consume file drops");
+    assert.equal(event.dataTransfer.dropEffect, "copy");
+    assert.equal(JSON.stringify(h.store.getSnapshot()), before, "file drops cannot change sessions or split panes");
+  });
+  test(`tab bars leave native file drops alone (${types.join(", ")})`, () => {
+    const h = harness(), bar = nodesOf(h.render("A")).find(n => n.props?.className === "dsv-tabbar");
+    let stopped = false, prevented = false;
+    const event = {
+      dataTransfer: { types, files: [{ name: "attachment.txt" }], items: [{ kind: "file" }], getData: () => "C" },
+      clientX: 50, currentTarget: { querySelectorAll: () => [] },
+      preventDefault() { prevented = true; }, stopPropagation() { stopped = true; },
+    };
+    bar.props.onDragOver(event); bar.props.onDrop(event);
+    assert.equal(stopped, false, "native file drop must reach document listeners from a tab bar");
+    assert.equal(prevented, false);
+  });
+  test(`global fallback ignores file drops even after a session preview (${types.join(", ")})`, () => {
+    const h = harness(); h.installer.isInstalled = () => false;
+    const attrs = new Map(), node = {
+      getBoundingClientRect: () => ({ left: 0, top: 0, right: 1000, bottom: 600, width: 1000, height: 600 }),
+      setAttribute: (k, v) => attrs.set(k, v), removeAttribute: k => attrs.delete(k),
+    };
+    h.document.querySelector = () => node;
+    const cleanup = h.installGlobalDrop();
+    const at = { clientX: 990, clientY: 300 };
+    h.documentListeners.get("dragover")({ ...at, dataTransfer: { types: ["text/plain"] }, preventDefault() {} });
+    assert.ok(attrs.has("data-dsv-drop"));
+    let stopped = false, prevented = false;
+    const event = { ...at, dataTransfer: { types, files: [{ name: "attachment.txt" }], getData: () => "C" },
+      preventDefault() { prevented = true; }, stopPropagation() { stopped = true; } };
+    h.documentListeners.get("drop")(event);
+    assert.equal(stopped, false, "stale session preview cannot intercept a file drop");
+    assert.equal(prevented, false);
+    assert.equal(attrs.has("data-dsv-drop"), false);
+    cleanup();
+  });
+}
+
+test("native attachment intake routes a document drop to one tab and preserves file pickers", () => {
+  const h = harness(), calls = [], files = [{ name: "attachment.txt" }], directories = new Set(files);
+  const owner = tabId => {
+    h.PaneContext.value = tabId ? { tabId } : null;
+    return h.component(h.PaneAttachments, {
+      attachments: [], canAcceptDrop: true, uploads: {},
+      onAddFiles: (...args) => calls.push({ tabId, args }), renderSlot: (name, props) => props,
+    });
+  };
+  const left = owner("left"), right = owner("right"), outside = owner(null);
+  h.fileDropTarget.current = { tabId: "left" };
+  for (const props of [left, right, outside]) props.onAddFiles(files, directories);
+  assert.deepEqual(calls.map(c => c.tabId), ["left"]);
+  assert.equal(calls[0].args[0], files); assert.equal(calls[0].args[1], directories);
+  h.fileDropTarget.current = null;
+  right.onAddFiles(files, directories); outside.onAddFiles(files, directories);
+  assert.deepEqual(calls.map(c => c.tabId), ["left", "right", null]);
+});
+
+test("file-drop capture chooses the pointed tab instead of the active pane and clears its routing", () => {
+  const h = harness(); h.installer.isInstalled = () => true;
+  const cleanup = h.installGlobalDrop();
+  const target = { closest: selector => selector === "[data-dsv-tab-body]" ? { getAttribute: () => "pointed-tab" } : null };
+  h.documentListeners.get("drop")({ target, dataTransfer: { types: ["Files"] } });
+  assert.equal(h.fileDropTarget.current.tabId, "pointed-tab");
+  h.runTimers(0); assert.equal(h.fileDropTarget.current, null);
+  const right = h.listGroups(h.store.getSnapshot().root).find(g => g.id === h.right);
+  h.documentListeners.get("drop")({ dataTransfer: { types: ["Files"] },
+    target: { closest: selector => selector === "[data-dsv-tab-group]" ? { getAttribute: () => h.right } : null } });
+  assert.equal(h.fileDropTarget.current.tabId, right.activeTabId);
+  cleanup(); assert.equal(h.fileDropTarget.current, null);
+});
+
+test("native attachment mirroring excludes its proxy and retains the original renderer", () => {
+  const h = harness(), registrations = [], slot = "conversation.input.attachments";
+  const native = { options: {}, component() {}, locale: "conversation" };
+  const proxy = { options: { id: "dsh-splitview.attachments" }, children: { [h.nativeSlotName(slot)]: { kind: "single" } } };
+  const cleanup = h.installNativeHeader({ slots: {
+    entries: name => name === slot ? [proxy, native] : [], subscribe: () => () => {},
+    inject: (name, fn) => fn(), register: (options, component) => { registrations.push({ options, component }); return () => {}; },
+  } });
+  assert.equal(registrations.length, 1);
+  const mirrored = registrations[0];
+  assert.equal(mirrored.options.name, h.nativeSlotName(slot));
+  assert.equal(mirrored.options.locale, "conversation");
+  assert.equal(mirrored.component({}).type, native.component);
+  cleanup();
 });
 
 function nodesOf(tree) {

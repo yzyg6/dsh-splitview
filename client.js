@@ -58,6 +58,14 @@ window.__ModuleLoader__.load({
 		const EDGE_BAND = 0.26;
 		/** Drag type our own tab drags carry, so the global drop veil ignores them. */
 		const TAB_DRAG_TYPE = "application/x-dsv-tab";
+		// Native attachment listeners run on document in the bubbling phase.
+		// Never claim a file drop, including OS drags that also carry text/plain.
+		const hasFilePayload = (data) => !!data && (
+			Array.from(data.types || []).includes("Files") ||
+			Array.from(data.items || []).some((item) => item.kind === "file") ||
+			!!(data.files && data.files.length)
+		);
+		const fileDropTarget = { current: null };
 		//#endregion
 
 		//#region styles
@@ -1177,7 +1185,21 @@ window.__ModuleLoader__.load({
 		//#endregion
 
 		//#region pane body
-		/** Mirror native header registrations into our owned namespace. Keep the
+		/** Keep native attachment rendering, but a document-level file drop belongs
+		 * to one pane. File-picker callbacks run outside this short-lived routing
+		 * context and continue to use their own composer normally. */
+		function PaneAttachments({ renderSlot, attachments, canAcceptDrop, onAddFiles, onRemoveAttachment, uploads, onRetryFile, dropLimits }) {
+			const pane = React.useContext(PaneContext);
+			const tabId = pane && pane.tabId;
+			const addFiles = React.useCallback((...args) => {
+				if (!fileDropTarget.current || fileDropTarget.current.tabId === tabId) return onAddFiles(...args);
+			}, [onAddFiles, tabId]);
+			return renderSlot(nativeSlotName("conversation.input.attachments"), {
+				attachments, canAcceptDrop, onAddFiles: addFiles, onRemoveAttachment, uploads, onRetryFile, dropLimits,
+			});
+		}
+
+		/** Mirror native header and attachment registrations into our namespace. Keep the
 		 * host's components, scoped stores, injections and extension entries; only
 		 * child slot names change, so ownership stays with the original plugin. */
 		function installNativeHeader(ctx) {
@@ -1194,12 +1216,14 @@ window.__ModuleLoader__.load({
 						visited.add(name);
 						if (!subscriptions.has(name)) subscriptions.set(name, ctx.slots.subscribe(name, sync));
 						for (const entry of ctx.slots.entries(name)) {
+							if (entry.options.id === NS + ".attachments") continue;
 							wanted.set(entry, name);
 							for (const key of Object.keys(entry.children || {})) visit(key);
 						}
 					};
 					visit("conversation.header");
 					visit("conversation.session");
+					visit("conversation.input.attachments");
 					// Release obsolete declarations before installing their replacements.
 					for (const [entry, dispose] of [...mirrors].reverse()) if (!wanted.has(entry)) { dispose(); mirrors.delete(entry); }
 					for (const [entry, name] of wanted) {
@@ -1242,7 +1266,7 @@ window.__ModuleLoader__.load({
 		 */
 		function PaneBody(props) {
 			const { renderFactorySlot, renderSlot, useSession, useSessions, useConversation, sessionId, tabId } = props;
-			const pane = React.useMemo(() => ({ renderSlot, readingKey: tabId + ":" + sessionId }), [renderSlot, tabId, sessionId]);
+			const pane = React.useMemo(() => ({ renderSlot, tabId, readingKey: tabId + ":" + sessionId }), [renderSlot, tabId, sessionId]);
 			// Every one of these is a uSES selector hook built by the renderer
 			// (bindSnapshotSelector): the selector is mandatory, so pass an identity
 			// function when we want the whole snapshot.
@@ -1639,6 +1663,7 @@ window.__ModuleLoader__.load({
 				edges.left || edges.right ? scrollButton("left") : null,
 				h("div", { ref: viewport, className: "dsv-workspace-tabs", onScroll: () => measure(false),
 					onDragOverCapture: (event) => {
+						if (hasFilePayload(event.dataTransfer)) return;
 						if (!Array.from(event.dataTransfer ? event.dataTransfer.types : []).includes(TAB_DRAG_TYPE)) return;
 						const node = viewport.current, rect = node.getBoundingClientRect();
 						if (event.clientX < rect.left + 24) node.scrollLeft -= 18;
@@ -1807,6 +1832,7 @@ window.__ModuleLoader__.load({
 			};
 
 			const onPaneDragOver = (event, group) => {
+				if (hasFilePayload(event.dataTransfer)) { setDropState(null); return; }
 				const types = event.dataTransfer ? Array.from(event.dataTransfer.types || []) : [];
 				if (!dragTabRef.current && types.indexOf("text/plain") < 0) return;
 				event.preventDefault();
@@ -1820,6 +1846,11 @@ window.__ModuleLoader__.load({
 			};
 
 			const onPaneDrop = (event, group) => {
+				if (hasFilePayload(event.dataTransfer)) {
+					setDropState(null);
+					dragTabRef.current = null;
+					return;
+				}
 				event.preventDefault();
 				event.stopPropagation();
 				const zone = zoneOfPoint(event.clientX, event.clientY, event.currentTarget.getBoundingClientRect());
@@ -1861,7 +1892,7 @@ window.__ModuleLoader__.load({
 					return index;
 				};
 				const barDropAt = (event) => {
-					if (!dragTabRef.current) return;
+					if (!dragTabRef.current || hasFilePayload(event.dataTransfer)) return;
 					event.preventDefault();
 					event.stopPropagation();
 					if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
@@ -1870,6 +1901,12 @@ window.__ModuleLoader__.load({
 					setDropState({ groupId: group.id, zone: "tabbar" });
 				};
 				const barDropCommit = (event) => {
+					if (!dragTabRef.current || hasFilePayload(event.dataTransfer)) {
+						setInsertAt(null);
+						setDropState(null);
+						dragTabRef.current = null;
+						return;
+					}
 					event.preventDefault();
 					event.stopPropagation();
 					const drag = dragTabRef.current;
@@ -2118,7 +2155,7 @@ window.__ModuleLoader__.load({
 				// While the takeover is installed the panes own their own drop targets.
 				if (installer.isInstalled()) return clear();
 				const data = event.dataTransfer;
-				if (!data) return clear();
+				if (!data || hasFilePayload(data)) return clear();
 				const types = Array.from(data.types || []);
 				// Our own tab drags carry TAB_DRAG_TYPE; those belong to the panes.
 				if (types.indexOf("text/plain") < 0 || types.indexOf(TAB_DRAG_TYPE) >= 0) return clear();
@@ -2137,6 +2174,19 @@ window.__ModuleLoader__.load({
 			const onDrop = (event) => {
 				const was = zone;
 				clear();
+				if (hasFilePayload(event.dataTransfer)) {
+					if (installer.isInstalled()) {
+						const target = event.target;
+						const body = target && typeof target.closest === "function" ? target.closest("[data-dsv-tab-body]") : null;
+						const bar = target && typeof target.closest === "function" ? target.closest("[data-dsv-tab-group]") : null;
+						const snap = store.getSnapshot();
+						const group = findGroup(snap.root, bar ? bar.getAttribute("data-dsv-tab-group") : snap.activeGroupId);
+						const route = { tabId: body ? body.getAttribute("data-dsv-tab-body") : group && group.activeTabId };
+						fileDropTarget.current = route;
+						setTimeout(() => { if (fileDropTarget.current === route) fileDropTarget.current = null; }, 0);
+					}
+					return;
+				}
 				if (!was || installer.isInstalled()) return;
 				event.preventDefault();
 				event.stopPropagation();
@@ -2170,6 +2220,7 @@ window.__ModuleLoader__.load({
 				document.removeEventListener("drop", onDrop, true);
 				document.removeEventListener("dragend", clear, true);
 				document.removeEventListener("dragleave", onLeave, true);
+				fileDropTarget.current = null;
 				clear();
 			};
 		}
@@ -2508,6 +2559,10 @@ window.__ModuleLoader__.load({
 				}, PaneBody)),
 				"dsh-splitview: pane body",
 			);
+			ctx.effect(() => ctx.slots.inject("conversation.input.attachments", () => ctx.slots.register({
+				name: "conversation.input.attachments", id: NS + ".attachments", priority: -1,
+				children: { [nativeSlotName("conversation.input.attachments")]: { kind: "single", scope: "session-maybe" } },
+			}, PaneAttachments)), "dsh-splitview: native attachment routing");
 			ctx.effect(() => installNativeHeader(ctx), "dsh-splitview: native header bridge");
 
 			// Entry point where the user already is: the session header.
