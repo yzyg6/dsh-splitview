@@ -5,16 +5,27 @@ import test from "node:test";
 
 // Execute the shipped bundle and its real Takeover effects. The host's
 // session projection and React commit scheduling are controlled by the test.
-function harness() {
+function harness({ element = null, deferTransitions = false } = {}) {
   let hooks = [], cursor = 0, effects = [], api;
+  let stateWrites = 0;
+  const transitions = [];
   const React = {
-    createElement: (type, props, ...children) => ({ type, props, children }),
+    createElement: (type, props, ...children) => {
+      if (element && typeof type === "string" && props?.ref) {
+        const node = element.panes?.get(props["data-dsv-group"]) || element;
+        if (typeof props.ref === "function") props.ref(node); else props.ref.current = node;
+      }
+      return { type, props, children };
+    },
     createContext: value => ({ Provider() {}, value }),
+    createPortal: (children, container) => ({ type: "portal", props: { container }, children: [children] }),
+    startTransition: run => { if (deferTransitions) transitions.push(run); else run(); },
     useContext: context => context.value,
+    useModalLayer() {},
     cloneElement: (element, props) => ({ ...element, props: { ...element.props, ...props } }),
     createRef: () => ({ current: null }),
     useRef(value) { const i = cursor++; return hooks[i] ??= { current: value }; },
-    useState(value) { const ref = React.useRef(value); return [ref.current, next => { ref.current = next; }]; },
+    useState(value) { const ref = React.useRef(value); return [ref.current, next => { const value = typeof next === "function" ? next(ref.current) : next; if (!Object.is(value, ref.current)) stateWrites++; ref.current = value; }]; },
     useReducer(fn, value) { const ref = React.useRef(value); return [ref.current, () => { ref.current = fn(ref.current); }]; },
     useMemo(fn, deps) {
       const i = cursor++, prev = hooks[i];
@@ -32,16 +43,24 @@ function harness() {
     useSyncExternalStore(subscribe, get) { return get(); },
   };
   let source = readFileSync(new URL("../client.js", import.meta.url), "utf8");
-  source = source.replace("return module.exports;", "return { Takeover, store, runtime, installer, listGroups, useReferenceReady, useHeldReferences, createReadingMemory, captureReading, restoreReading, Resizer, PaneBody, installNativeHeader, nativeSlotName, WorkspaceTabs, createStore, readingMemory, readingCaptures, persistWorkspace, loadReadingHistory, createNativeReadingStore, installGlobalDrop, PaneAttachments, PaneContext, fileDropTarget };");
+  source = source.replace("return module.exports;", "return { Takeover, StableTakeover, ReadingTab, TabContent, store, runtime, installer, listGroups, useReferenceReady, useHeldReferences, createReadingMemory, captureReading, restoreReading, Resizer, PaneBody, WidthControls, installNativeHeader, nativeSlotName, WorkspaceTabs, createStore, readingMemory, readingCaptures, persistWorkspace, loadReadingHistory, createNativeReadingStore, installGlobalDrop, PaneAttachments, PaneContext, fileDropTarget, createSidebarPreferences, partitionSidebarPanels, sidebarPreferences, SidebarRail, CompactSidebar, installCompactSidebar };");
+  source = source.replace("return { Takeover,", "return { installPluginRail, installSidebarShortcut, railColumns, Takeover,");
   const documentListeners = new Map();
   const timers = new Map();
   const frames = new Map();
   const createdNodes = [];
   const savedStorage = new Map();
+  const mutations = [], resizes = [];
+  const observer = collection => class {
+    constructor(callback) { this.callback = callback; this.targets = []; collection.push(this); }
+    observe(target) { this.targets.push(target); }
+    disconnect() { this.targets = []; }
+  };
   const storage = { getItem: key => savedStorage.get(key) ?? null, setItem: (key, value) => savedStorage.set(key, value) };
   let timerId = 0;
   const context = {
-    window: { __ModuleLoader__: { load({ factory }) { api = factory(() => React); } } },
+    window: { __ModuleLoader__: { load({ factory }) { api = factory(() => React); } }, addEventListener() {}, removeEventListener() {} },
+    MutationObserver: observer(mutations), ResizeObserver: observer(resizes),
     localStorage: storage,
     setTimeout: (fn, delay) => { timers.set(++timerId, { fn, delay }); return timerId; },
     clearTimeout: id => timers.delete(id), console,
@@ -49,7 +68,7 @@ function harness() {
     cancelAnimationFrame: id => frames.delete(id),
     document: {
       querySelectorAll: () => [],
-      createElement: () => { const node = { style: {}, setAttribute() {}, remove() { node.removed = true; } }; createdNodes.push(node); return node; },
+      createElement: () => { const node = { style: {}, setAttribute() {}, remove() { node.removed = true; node.parentNode = null; } }; createdNodes.push(node); return node; },
       body: { appendChild() {} },
       addEventListener: (name, fn) => documentListeners.set(name, fn),
       removeEventListener: name => documentListeners.delete(name),
@@ -69,7 +88,11 @@ function harness() {
   const right = api.store.actions.splitGroup(left, "row", "after", "B");
   api.store.actions.focusGroup(left);
   return {
-    ...api, left, right, list, writes, documentListeners, createdNodes, storage, document: context.document,
+    ...api, left, right, list, writes, documentListeners, createdNodes, storage, mutations, resizes, document: context.document,
+    get pendingFrames() { return frames.size; },
+    get stateWrites() { return stateWrites; },
+    runTransitions() { for (const run of transitions.splice(0)) run(); },
+    cleanup() { for (const hook of hooks) hook?.cleanup?.(); hooks = []; },
     runTimers(delay) { for (const [id, timer] of [...timers]) if (timer.delay === delay) { timers.delete(id); timer.fn(); } },
     runFrames() { for (const [id, fn] of [...frames]) { frames.delete(id); fn(); } },
     component(Component, props) {
@@ -742,4 +765,700 @@ test("a restored active pane wins over the host's initial session hydration", ()
   h.render("A");
   h.render("B");
   assert.equal(h.active(), "B", "later sidebar navigation must still work");
+});
+
+function readingFixture() {
+  const listeners = new Map();
+  let scans = 0;
+  const anchor = {
+    getAttribute: name => name === "data-chat-anchor-key" ? "message-1" : null,
+    getBoundingClientRect: () => ({ top: 0, bottom: 100, height: 100 }),
+  };
+  const scroller = {
+    scrollTop: 0, clientHeight: 500, scrollHeight: 10000,
+    getBoundingClientRect: () => ({ top: 0 }),
+    querySelector: () => anchor,
+    querySelectorAll: selector => {
+      if (selector === "[data-chat-anchor-key]") { scans++; return [anchor]; }
+      return [];
+    },
+  };
+  const node = {
+    querySelector: () => scroller,
+    appendChild(target) { target.parentNode = node; target.removed = false; },
+    addEventListener: (name, fn) => listeners.set(name, fn),
+    removeEventListener: name => listeners.delete(name),
+  };
+  return { node, scroller, listeners, get scans() { return scans; } };
+}
+
+test("performance: a scroll burst captures reading once per frame and flushes the final position", () => {
+  const fixture = readingFixture(), h = harness({ element: fixture.node });
+  h.component(h.ReadingTab, { tab: { id: "perf", sessionId: "A" }, active: true });
+  fixture.listeners.get("wheel")({ type: "wheel", target: fixture.scroller });
+  for (let i = 1; i <= 120; i++) {
+    fixture.scroller.scrollTop = i;
+    fixture.listeners.get("scroll")({ target: fixture.scroller });
+  }
+  assert.equal(fixture.scans, 0, "scroll handlers must not synchronously scan the conversation");
+  assert.equal(h.pendingFrames, 1);
+  h.runFrames();
+  assert.equal(fixture.scans, 1);
+  assert.equal(h.readingMemory.get("perf:A").top, 120);
+  fixture.scroller.scrollTop = 999;
+  fixture.listeners.get("scroll")({ target: fixture.scroller });
+  h.cleanup();
+  assert.equal(h.readingMemory.get("perf:A").top, 999, "switching away must capture before cancelling the queued frame");
+  assert.equal(h.pendingFrames, 0);
+  h.runFrames();
+  assert.equal(fixture.scans, 2, "a detached tab must not capture again");
+});
+
+test("performance: tabs without saved reading do not observe streaming mutations", () => {
+  const fixture = readingFixture(), h = harness({ element: fixture.node });
+  h.component(h.ReadingTab, { tab: { id: "fresh", sessionId: "A" }, active: true });
+  assert.equal(h.mutations.filter(observer => observer.targets.length).length, 0);
+  assert.equal(h.resizes.filter(observer => observer.targets.length).length, 0);
+  h.cleanup();
+});
+
+test("performance: disclosure capture scans each owning row once in long tool output", () => {
+  const h = harness();
+  let scans = 0;
+  const row = {
+    getAttribute: name => name === "data-chat-anchor-key" ? "tools" : null,
+    getBoundingClientRect: () => ({ top: 0, bottom: 100, height: 100 }),
+    querySelectorAll: () => { scans++; return controls; },
+  };
+  const controls = Array.from({ length: 200 }, (_, index) => ({
+    tagName: "BUTTON", closest: () => row, getAttribute: () => String(index % 2 === 0),
+  }));
+  const scroller = {
+    scrollTop: 10, clientHeight: 500, scrollHeight: 10000,
+    getBoundingClientRect: () => ({ top: 0 }),
+    querySelectorAll: selector => selector === "[data-chat-anchor-key]" ? [row] : controls,
+  };
+  const saved = h.captureReading(scroller);
+  assert.equal(saved.disclosures.length, 64);
+  assert.equal(saved.disclosures[63].index, 63);
+  assert.equal(saved.disclosures[0].open, true);
+  assert.ok(scans <= 1, `one tool row was scanned ${scans} times`);
+  scans = 0;
+  h.restoreReading(scroller, saved);
+  assert.ok(scans <= 1, `restoring one tool row scanned it ${scans} times`);
+});
+
+test("performance: streaming changes inside the overlay do not remeasure the host seat", () => {
+  const h = harness();
+  let reads = 0;
+  const seat = { getBoundingClientRect: () => { reads++; return { left: 10, top: 20, width: 1000, height: 800 }; } };
+  h.document.querySelector = () => seat;
+  h.component(h.StableTakeover, {});
+  const observer = h.mutations[0];
+  const content = { closest: selector => selector === ".dsv-surface" ? {} : null };
+  for (let i = 0; i < 120; i++) { observer.callback([{ target: content }]); h.runFrames(); }
+  assert.equal(reads, 1, "streaming content cannot move its fixed overlay's host seat");
+  observer.callback([{ target: { closest: () => null } }]); h.runFrames();
+  assert.equal(reads, 2, "changes outside the overlay must still refresh the seat");
+  h.cleanup();
+});
+
+test("reading restoration refreshes controls after expansion replaces nested DOM", () => {
+  const h = harness();
+  let controls, firstOpen = false, secondOpen = false, staleClicks = 0;
+  const row = { getAttribute: () => "tools", querySelectorAll: () => controls };
+  const second = { tagName: "BUTTON", closest: () => row, getAttribute: () => String(secondOpen), click: () => { secondOpen = true; } };
+  const stale = { ...second, click: () => { staleClicks++; } };
+  const first = {
+    tagName: "BUTTON", closest: () => row, getAttribute: () => String(firstOpen),
+    click() { firstOpen = true; controls = [first, second]; },
+  };
+  controls = [first, stale];
+  const scroller = { clientHeight: 500, scrollHeight: 1000, querySelectorAll: () => [row] };
+  h.restoreReading(scroller, { bottom: true, disclosures: [
+    { key: "tools", index: 0, open: true }, { key: "tools", index: 1, open: true },
+  ] });
+  assert.equal(firstOpen, true);
+  assert.equal(secondOpen, true, "the second state must reach the newly rendered control");
+  assert.equal(staleClicks, 0);
+});
+
+test("reading capture keeps independent indices for nested message anchors", () => {
+  const h = harness();
+  const outer = { getAttribute: name => name === "data-chat-anchor-key" ? "outer" : null, getBoundingClientRect: () => ({ top: 0, bottom: 100, height: 100 }) };
+  const inner = { getAttribute: () => "inner" };
+  const control = (row, open) => ({ tagName: "BUTTON", closest: () => row, getAttribute: () => String(open) });
+  const controls = [control(null, false), control(outer, true), control(inner, false), control(inner, true), control(outer, false)];
+  const scroller = {
+    scrollTop: 0, clientHeight: 500, scrollHeight: 1000, getBoundingClientRect: () => ({ top: 0 }),
+    querySelectorAll: selector => selector === "[data-chat-anchor-key]" ? [outer, inner] : controls,
+  };
+  const saved = h.captureReading(scroller);
+  assert.deepEqual(Array.from(saved.disclosures, item => [item.key, item.index, item.open]), [
+    ["outer", 0, true], ["inner", 0, false], ["inner", 1, true], ["outer", 1, false],
+  ]);
+});
+
+test("saved reading observes late content only until restoration settles", () => {
+  const fixture = readingFixture(), h = harness({ element: fixture.node });
+  h.readingMemory.put("saved:A", { top: 123, bottom: false, anchorKey: "message-1", anchorTop: -123 });
+  h.component(h.ReadingTab, { tab: { id: "saved", sessionId: "A" }, active: true });
+  assert.equal(h.mutations[0].targets.length, 1);
+  h.runFrames(); h.runFrames();
+  assert.equal(fixture.scroller.scrollTop, 123);
+  h.runTimers(1000);
+  assert.equal(h.mutations[0].targets.length, 0);
+  assert.equal(h.resizes[0].targets.length, 0);
+  fixture.scroller.scrollTop = 456;
+  fixture.listeners.get("wheel")({ type: "wheel", target: fixture.scroller });
+  fixture.listeners.get("scroll")({ target: fixture.scroller });
+  h.persistWorkspace();
+  const saved = JSON.parse(h.storage.getItem("dsh-splitview:reading:v1"));
+  assert.equal(saved.find(([key]) => key === "saved:A")[1].top, 456, "page exit must flush a capture even before the animation frame");
+  h.cleanup();
+  assert.equal(h.pendingFrames, 0);
+});
+
+test("scrolls inside a nested tool card do not capture the conversation", () => {
+  const fixture = readingFixture(), h = harness({ element: fixture.node });
+  h.component(h.ReadingTab, { tab: { id: "nested", sessionId: "A" }, active: true });
+  fixture.listeners.get("scroll")({ target: {} });
+  assert.equal(h.pendingFrames, 0);
+  assert.equal(fixture.scans, 0);
+  h.cleanup();
+});
+
+test("performance: sidebar seat resizing changes geometry without scheduling a conversation render", () => {
+  const surface = { style: {} }, h = harness({ element: surface });
+  const box = { left: 0, top: 40, width: 1000, height: 700 };
+  h.document.querySelector = () => ({ getBoundingClientRect: () => ({ ...box }) });
+  h.component(h.StableTakeover, {});
+  const writes = h.stateWrites;
+  box.left = 280; box.width = 720;
+  for (let i = 0; i < 20; i++) h.resizes[0].callback();
+  assert.equal(h.pendingFrames, 1);
+  h.runFrames();
+  assert.equal(h.stateWrites, writes, "a sidebar animation must not invalidate the React conversation tree");
+  assert.equal(surface.style.left, "280px");
+  assert.equal(surface.style.width, "720px");
+  h.cleanup();
+});
+
+function paneGeometryFixture() {
+  let firstWidth = 500;
+  const layout = { panes: new Map(), style: {}, getBoundingClientRect: () => ({ left: 0, top: 0 }), querySelectorAll: () => seats };
+  const h = harness({ element: layout });
+  const seats = [h.left, h.right].map((id, index) => ({ dataset: { dsvGroupSeat: id }, getBoundingClientRect: () => ({ left: index ? firstWidth : 0, top: 0, width: index ? 1000 - firstWidth : firstWidth, height: 700 }) }));
+  for (const id of [h.left, h.right]) layout.panes.set(id, { style: {} });
+  return { h, layout, resize: value => { firstWidth = value; } };
+}
+
+test("performance: pane resize notifications are batched without rerendering native content", () => {
+  const { h, layout, resize } = paneGeometryFixture();
+  h.render("A");
+  const writes = h.stateWrites;
+  resize(600);
+  for (let i = 0; i < 20; i++) h.resizes[0].callback();
+  h.runFrames();
+  assert.equal(h.stateWrites, writes, "pane coordinates must not become React conversation state");
+  assert.equal(layout.panes.get(h.left).style.width, "600px");
+  assert.equal(layout.panes.get(h.right).style.left, "600px");
+  h.cleanup();
+});
+
+test("performance: changing tabs keeps the existing geometry observers", () => {
+  const { h } = paneGeometryFixture();
+  h.render("A");
+  const observers = h.resizes.length;
+  h.store.actions.addTab(h.left); h.render("A");
+  assert.equal(h.resizes.length, observers, "a tab edit does not change the pane skeleton");
+  h.cleanup();
+});
+
+test("performance: an unrelated host render reuses the conversation workspace element", () => {
+  const h = harness(), props = { renderSlot() {}, SessionProvider() {} };
+  h.document.querySelector = () => null;
+  const first = h.component(h.StableTakeover, props);
+  const next = h.component(h.StableTakeover, { ...props, sidebarWidth: 280 });
+  assert.equal(next.children[0], first.children[0], "host layout props do not affect the session workspace");
+  h.cleanup();
+});
+
+test("performance: layout-driven scrolls and header clicks do not scan reading anchors", () => {
+  const fixture = readingFixture(), h = harness({ element: fixture.node });
+  h.component(h.ReadingTab, { tab: { id: "layout", sessionId: "A" }, active: true });
+  fixture.scroller.scrollTop = 300;
+  fixture.listeners.get("scroll")({ target: fixture.scroller });
+  assert.equal(h.pendingFrames, 0, "scroll anchoring during pane resizing is not user scrolling");
+  fixture.listeners.get("click")({ target: { closest: selector => selector === ".dsv-native-header" ? {} : null } });
+  assert.equal(h.pendingFrames, 0, "opening a header sidebar must not force a reading capture");
+  assert.equal(fixture.scans, 0);
+  h.cleanup();
+  assert.equal(h.readingMemory.get("layout:A").top, 300, "leaving the tab must still save the actual current position");
+});
+
+test("reading clicks in message content still capture disclosure changes", () => {
+  const fixture = readingFixture(), h = harness({ element: fixture.node });
+  h.component(h.ReadingTab, { tab: { id: "disclosure", sessionId: "A" }, active: true });
+  fixture.listeners.get("click")({ target: { closest: () => null } });
+  h.runFrames();
+  assert.equal(fixture.scans, 1);
+  h.cleanup();
+});
+
+test("performance: width observer uses supplied geometry and batches repeated writes", () => {
+  const h = harness(), css = new Map(); let reads = 0;
+  const container = { get offsetWidth() { reads++; return 620; }, parentElement: { style: { setProperty: (key, value) => css.set(key, value), removeProperty: key => css.delete(key) } } };
+  h.component(h.WidthControls, { container, phase: "active" });
+  reads = 0;
+  const entries = [{ target: container, borderBoxSize: [{ inlineSize: 620 }] }];
+  for (let i = 0; i < 20; i++) h.resizes[0].callback(entries);
+  assert.equal(reads, 0, "ResizeObserver already supplied the width; offsetWidth would force another layout");
+  assert.equal(h.pendingFrames, 1);
+  h.runFrames();
+  assert.equal(css.get("--dsh-conversation-column-width"), "620px");
+  h.resizes[0].callback(entries);
+  assert.equal(h.pendingFrames, 0, "height-only changes must not republish the same width");
+  h.cleanup();
+});
+
+test("inactive panes keep native content but suspend invisible header extensions", () => {
+  const h = harness(), calls = [];
+  h.component(h.PaneBody, { sessionId: "A", tabId: "tab-A", active: false,
+    renderSlot: name => { calls.push(name); return null; },
+    renderFactorySlot: name => { calls.push(name); return null; },
+  });
+  assert.deepEqual(calls, ["conversation.content"], "hidden tabs do not need header extension observers");
+});
+
+test("inactive width controls do not retain resize observers", () => {
+  const h = harness();
+  h.PaneContext.value = { active: false };
+  h.component(h.WidthControls, { container: { offsetWidth: 0, style: { setProperty() {}, removeProperty() {} } }, phase: "active" });
+  assert.equal(h.resizes.length, 0);
+});
+
+test("ready conversations mount in a transition and obsolete completions cannot replace a retry", async () => {
+  const h = harness({ deferTransitions: true });
+  const first = { kind: "held", reference: { ready: Promise.resolve() } };
+  h.component(h.useReferenceReady, first);
+  await Promise.resolve();
+  assert.equal(h.component(h.useReferenceReady, first).kind, "loading", "native content must not mount in the urgent layout update");
+  const fresh = { kind: "held", reference: { ready: Promise.resolve() } };
+  h.component(h.useReferenceReady, fresh);
+  h.runTransitions();
+  assert.equal(h.component(h.useReferenceReady, fresh).kind, "loading");
+  await Promise.resolve(); h.runTransitions();
+  assert.equal(h.component(h.useReferenceReady, fresh).kind, "ready");
+});
+
+test("parking a tab reuses its portal container and saves before hiding", () => {
+  const fixture = readingFixture(), h = harness({ element: fixture.node });
+  Object.defineProperty(fixture.scroller, "clientHeight", { get: () => fixture.node.hidden ? 0 : 500 });
+  const props = { tab: { id: "parked", sessionId: "A" }, children: { draft: "unchanged draft" } };
+  const first = h.component(h.ReadingTab, { ...props, active: true });
+  const container = first.children[0].props.container;
+  assert.equal(container.parentNode, fixture.node);
+  fixture.scroller.scrollTop = 321;
+  fixture.listeners.get("wheel")({ type: "wheel", target: fixture.scroller });
+  fixture.listeners.get("scroll")({ target: fixture.scroller });
+  const parked = h.component(h.ReadingTab, { ...props, active: false });
+  assert.equal(h.readingMemory.get("parked:A").top, 321, "flush before hiding or detaching the viewport");
+  assert.equal(parked.children[0].props.container, container);
+  assert.equal(container.removed, true);
+  const restored = h.component(h.ReadingTab, { ...props, active: true });
+  assert.equal(restored.children[0].props.container, container);
+  assert.equal(restored.children[0].children[0], props.children);
+  assert.equal(container.removed, false);
+  assert.equal(h.createdNodes.length, 1);
+  h.cleanup();
+});
+
+test("tab content reuses its native slot and refreshes visibility and retry status", () => {
+  const h = harness(), calls = [], retries = [];
+  const group = h.listGroups(h.store.getSnapshot().root).find(g => g.id === h.left);
+  const props = { groupId: h.left, tabId: group.activeTabId, sessionId: "A", active: true,
+    status: { kind: "held", reference: {} }, SessionProvider() {}, retrySession: id => retries.push(id),
+    renderSlot: (name, owner) => { calls.push({ name, owner }); return { name, owner }; },
+  };
+  const first = h.component(h.TabContent, props);
+  assert.equal(h.component(h.TabContent, { ...props, paneWidth: 600 }), first);
+  assert.equal(calls.length, 1);
+  h.component(h.TabContent, { ...props, active: false });
+  assert.equal(calls.at(-1).owner.active, false);
+  const fresh = { ...props, status: { kind: "held", reference: {} } };
+  const retried = h.component(h.TabContent, fresh);
+  assert.equal(retried.props.status, fresh.status);
+  retried.props.onRetry(); assert.deepEqual(retries, ["A"]);
+  retried.props.onChoose(); assert.equal(h.active(), null);
+});
+
+test("width monitoring resumes on reveal and cancels queued writes on hide", () => {
+  const h = harness(), writes = [];
+  const container = { offsetWidth: 600, style: { setProperty: (...args) => writes.push(args), removeProperty() {} } };
+  h.PaneContext.value = { active: false };
+  h.component(h.WidthControls, { container, phase: "active" });
+  h.PaneContext.value = { active: true };
+  h.component(h.WidthControls, { container, phase: "active" });
+  h.resizes[0].callback([{ target: container, borderBoxSize: [{ inlineSize: 600 }] }]);
+  assert.equal(h.pendingFrames, 1);
+  h.PaneContext.value = { active: false };
+  h.component(h.WidthControls, { container, phase: "active" });
+  assert.equal(h.resizes[0].targets.length, 0);
+  assert.equal(h.pendingFrames, 0);
+  h.runFrames(); assert.equal(writes.length, 0);
+  h.cleanup();
+});
+
+test("embedded pages stay attached across tab hiding and reveal", () => {
+  const fixture = readingFixture(), h = harness({ element: fixture.node });
+  let appends = 0;
+  fixture.node.appendChild = target => { appends++; target.parentNode = fixture.node; target.removed = false; };
+  const props = { tab: { id: "embedded", sessionId: "A" }, children: {} };
+  const tree = h.component(h.ReadingTab, { ...props, active: true });
+  const target = tree.children[0].props.container;
+  target.querySelector = () => ({ tagName: "IFRAME" });
+  h.component(h.ReadingTab, { ...props, active: false });
+  assert.equal(target.parentNode, fixture.node, "hiding an embedded page must not destroy its browsing context");
+  assert.equal(fixture.node.hidden, true);
+  h.component(h.ReadingTab, { ...props, active: true });
+  assert.equal(appends, 1, "even re-appending an attached iframe can reload it");
+  assert.equal(fixture.node.hidden, false);
+  h.cleanup();
+});
+
+test("leaving the conversation slot hides the entire overlay including explicitly visible panes", () => {
+  const surface = { style: {} }, h = harness({ element: surface });
+  let seat = { getBoundingClientRect: () => ({ left: 280, top: 40, width: 1000, height: 700 }) };
+  h.document.querySelector = () => seat;
+  h.component(h.StableTakeover, {});
+  seat = null;
+  h.mutations[0].callback([{ target: { closest: () => null } }]); h.runFrames();
+  assert.equal(surface.style.display, "none", "visibility:hidden alone can be overridden by a visible descendant");
+  assert.equal(surface.inert, true, "off-page conversation controls must not accept focus");
+  h.cleanup();
+});
+
+test("host panel selection hides immediately even while its old conversation seat remains", () => {
+  const surface = { style: {} }, h = harness({ element: surface }), listeners = new Set();
+  let activePanelId = null, width = 1000;
+  h.runtime.layout = { panelInfo: {
+    getSnapshot: () => ({ activePanelId }),
+    subscribe: fn => { listeners.add(fn); return () => listeners.delete(fn); },
+  } };
+  h.document.querySelector = () => ({ getBoundingClientRect: () => ({ left: 280, top: 40, width, height: 700 }) });
+  h.component(h.StableTakeover, {});
+  activePanelId = "plugins"; for (const listener of listeners) listener();
+  assert.equal(surface.style.display, "none", "route state must hide before the next animation frame");
+  assert.equal(surface.inert, true);
+  h.runFrames(); assert.equal(surface.style.display, "none", "a stale seat cannot reveal the overlay on another page");
+  activePanelId = null; width = 800; for (const listener of listeners) listener(); h.runFrames();
+  assert.equal(surface.style.display, "");
+  assert.equal(surface.style.width, "800px");
+  assert.equal(surface.inert, false);
+  h.cleanup(); assert.equal(listeners.size, 0);
+});
+
+test("initializing on a global page ignores stale conversation geometry", () => {
+  const surface = { style: {} }, h = harness({ element: surface });
+  let measured = 0;
+  h.runtime.layout = { panelInfo: {
+    getSnapshot: () => ({ activePanelId: "plugins" }),
+    subscribe: () => () => {},
+  } };
+  h.document.querySelector = () => ({ getBoundingClientRect: () => { measured++; return { width: 1000, height: 700 }; } });
+  h.component(h.StableTakeover, {});
+  assert.equal(surface.style.display, "none");
+  assert.equal(surface.inert, true);
+  assert.equal(measured, 0, "global pages must not trigger conversation layout work");
+  h.cleanup();
+});
+
+test("leaving a host panel captures reading before hiding and tolerates detached content", () => {
+  const surface = { style: {} }, h = harness({ element: surface }), listeners = new Set(), captures = [];
+  let activePanelId = null;
+  h.runtime.layout = { panelInfo: {
+    getSnapshot: () => ({ activePanelId }),
+    subscribe: fn => { listeners.add(fn); return () => listeners.delete(fn); },
+  } };
+  h.document.querySelector = () => ({ getBoundingClientRect: () => ({ left: 280, top: 40, width: 1000, height: 700 }) });
+  h.component(h.StableTakeover, {});
+  h.readingCaptures.add(() => { throw Error("detached content"); });
+  h.readingCaptures.add(() => captures.push(surface.style.display));
+  activePanelId = "plugins"; for (const listener of listeners) listener();
+  assert.deepEqual(captures, [""], "capture must see the original viewport dimensions");
+  assert.equal(surface.style.display, "none");
+  for (const listener of listeners) listener();
+  assert.equal(captures.length, 1, "repeated hidden notifications must not overwrite reading with zero geometry");
+  h.cleanup();
+});
+
+test("compact sidebar ranks three available panels by usage with stable native tie order", () => {
+  const h = harness();
+  const panels = ["plugins", "market", "tasks", "ssh", "agents"].map(id => ({ id, label: id }));
+  const defaultRank = h.partitionSidebarPanels(panels, {});
+  assert.deepEqual(Array.from(defaultRank.common, p => p.id), ["plugins", "market", "tasks"]);
+  const ranked = h.partitionSidebarPanels(panels, { ssh: 8, agents: 3, tasks: 3, removed: 100 });
+  assert.deepEqual(Array.from(ranked.common, p => p.id), ["ssh", "tasks", "agents"]);
+  assert.deepEqual(Array.from(ranked.more, p => p.id), ["plugins", "market"]);
+  assert.deepEqual(panels.map(p => p.id), ["plugins", "market", "tasks", "ssh", "agents"], "host registry must remain unchanged");
+});
+
+test("sidebar usage persists across launches and one click records one navigation", () => {
+  const h = harness(), preferences = h.createSidebarPreferences(h.storage), notifications = [];
+  const initial = preferences.getSnapshot(), off = preferences.subscribe(() => notifications.push(1));
+  assert.equal(preferences.getSnapshot(), initial, "external store reads must be stable");
+  preferences.record("ssh"); preferences.record("ssh"); preferences.record("plugins");
+  assert.equal(preferences.getSnapshot().usage.ssh, 2);
+  assert.equal(notifications.length, 3);
+  preferences.setCompact(false); preferences.setCompact(false);
+  const restored = h.createSidebarPreferences(h.storage).getSnapshot();
+  assert.equal(restored.compact, false); assert.equal(restored.usage.ssh, 2);
+  assert.equal(restored.usage.plugins, 1); assert.equal(notifications.length, 4);
+  off(); preferences.record("ssh"); assert.equal(notifications.length, 4);
+  preferences.resetUsage();
+  assert.deepEqual(Object.keys(preferences.getSnapshot().usage), []);
+  assert.equal(h.createSidebarPreferences(h.storage).getSnapshot().compact, false);
+});
+
+test("sidebar storage corruption, blocked storage and inherited property ids cannot break navigation", () => {
+  const h = harness();
+  const corrupt = h.createSidebarPreferences({ getItem: () => "invalid json" });
+  assert.equal(corrupt.getSnapshot().compact, true);
+  const blocked = h.createSidebarPreferences({ getItem() { throw Error("blocked"); }, setItem() { throw Error("full"); } });
+  assert.doesNotThrow(() => blocked.record("plugins"));
+  blocked.record("__proto__"); blocked.record("toString");
+  assert.equal(blocked.getSnapshot().usage.__proto__, 1);
+  assert.equal(blocked.getSnapshot().usage.toString, 1);
+  const restored = h.createSidebarPreferences({ getItem: () => JSON.stringify({ compact: false, usage: { good: 2, negative: -3, fractional: 1.2, huge: 2e12, text: "4" } }) });
+  assert.deepEqual(Object.keys(restored.getSnapshot().usage), ["good"]);
+  assert.equal(restored.getSnapshot().compact, false);
+});
+
+function findTree(tree, match) {
+  if (!tree || typeof tree !== "object") return null;
+  if (match(tree)) return tree;
+  return (tree.children || []).flat(Infinity).map(child => findTree(child, match)).find(Boolean) || null;
+}
+
+test("sidebar rail opens native panels without moving pinned entries after usage changes", () => {
+  const h = harness(), selected = [];
+  const props = { panels: ["A", "B", "C", "D"].map(id => ({ id, label: id })), selectPanel: id => selected.push(id),
+    usePanelInfo: select => select({ activePanelId: "A" }), renderSlot: () => null };
+  const first = h.component(h.SidebarRail, props);
+  const overflow = findTree(first, node => node.props?.["data-dsv-sidebar-menu-panel"] === "D");
+  overflow.props.onSelect();
+  assert.deepEqual(selected, ["D"]); assert.equal(h.sidebarPreferences.getSnapshot().usage.D, 1);
+  const next = h.component(h.SidebarRail, props);
+  assert.equal(findTree(next, node => node.props?.["data-dsv-sidebar-panel"] === "D"), null);
+  assert.ok(findTree(next, node => node.props?.["data-dsv-sidebar-menu-panel"] === "D"));
+  const common = findTree(next, node => node.props?.["data-dsv-sidebar-panel"] === "A");
+  assert.equal(common.props["aria-current"], "page");
+  common.props.onClick(); assert.deepEqual(selected, ["D", "A"]);
+  h.cleanup();
+});
+
+test("compact shell reuses workspace content across panel changes and honors session permissions", () => {
+  const h = harness(), slots = [], started = [];
+  const props = { collapsed: false, width: 280, drawer: false, startSession: () => started.push(1), toggleSidebar() {}, selectPanel() {},
+    useRemoteAccess: () => false, usePanels: select => select([]), usePanelInfo: select => select({ activePanelId: null }),
+    renderSlot: (name, owner) => { slots.push({ name, owner }); return { native: name }; } };
+  const first = h.component(h.CompactSidebar, props);
+  const second = h.component(h.CompactSidebar, props);
+  assert.equal(slots.filter(s => s.name === "sidebar.workspaces").length, 1);
+  assert.equal(first.props.style.width, "280px"); assert.equal(second.props.style.width, "280px");
+  assert.equal(findTree(first, n => n.props?.className === "dsv-sidebar__new"), null);
+  assert.equal(findTree(first, n => n.props?.className === "dsv-sidebar__icon dsv-sidebar__brand").props.disabled, true);
+  const collapsed = h.component(h.CompactSidebar, { ...props, collapsed: true });
+  assert.equal(findTree(collapsed, n => n.props?.className === "dsv-sidebar__workspaces").props.inert, true);
+  assert.equal(collapsed.props.style.width, "56px");
+  assert.deepEqual(started, []); h.cleanup();
+});
+
+test("compact sidebar restores native registration when disabled and releases every subscription", () => {
+  const h = harness(), listeners = new Set(), rows = [{ options: {}, inject() {}, children: { "sidebar.workspaces": { kind: "single", scope: "root" } } }], registered = [];
+  const native = rows[0];
+  const ctx = { shortcuts: { registry: { commands: new Map() }, catalog: { subscribe: () => () => {} } }, slots: {
+    entries: () => rows,
+    subscribe: (name, fn) => { listeners.add(fn); return () => listeners.delete(fn); },
+    register: (options, component) => {
+      const entry = { options, component }; rows.unshift(entry); registered.push(entry);
+      for (const fn of listeners) fn();
+      return () => { rows.splice(rows.indexOf(entry), 1); for (const fn of listeners) fn(); };
+    },
+  } };
+  const dispose = h.installCompactSidebar(ctx);
+  assert.equal(registered.length, 1); assert.equal(registered[0].options.inject, native.inject);
+  assert.deepEqual(Object.keys(registered[0].options.children), ["dsh-splitview.native.sidebar.workspaces"], "native child slots keep their original declarations; copies use the plugin namespace");
+  assert.equal(registered[0].options.children["dsh-splitview.native.sidebar.workspaces"].scope, "root");
+  h.sidebarPreferences.record("A"); assert.equal(registered.length, 1, "usage must not remount the shell");
+  h.sidebarPreferences.setCompact(false); assert.equal(rows.length, 1); assert.equal(rows[0], native);
+  h.sidebarPreferences.setCompact(true); assert.equal(registered.length, 2);
+  dispose(); assert.equal(rows.length, 1); assert.equal(listeners.size, 0);
+});
+
+test("sidebar upgrade freezes the initial recommendations once and persists the chosen order", () => {
+  const h = harness();
+  const storage = { getItem: () => JSON.stringify({ compact: true, usage: { D: 8 } }), setItem: h.storage.setItem };
+  const p = h.createSidebarPreferences(storage), panels = ["A", "B", "C", "D"].map(id => ({ id }));
+  p.initializePins([]); assert.equal(p.getSnapshot().pinned, null);
+  p.initializePins(panels); assert.deepEqual(Array.from(p.getSnapshot().pinned), ["D", "A", "B"]);
+  for (let i = 0; i < 20; i++) p.record("C");
+  p.initializePins(panels);
+  assert.deepEqual(Array.from(p.getSnapshot().pinned), ["D", "A", "B"], "clicks and later registry updates must not change fixed positions");
+  assert.deepEqual(Array.from(h.createSidebarPreferences(h.storage).getSnapshot().pinned), ["D", "A", "B"]);
+});
+
+test("manual favorites enforce three slots and leave deliberately emptied slots empty", () => {
+  const h = harness(), p = h.createSidebarPreferences(h.storage);
+  p.setPinned(["A", "B", "C"]); p.pin("D", true);
+  assert.deepEqual(Array.from(p.getSnapshot().pinned), ["A", "B", "C"]);
+  p.pin("B", false); p.pin("D", true); p.pin("D", true);
+  assert.deepEqual(Array.from(p.getSnapshot().pinned), ["A", "C", "D"]);
+  p.setPinned([]); p.initializePins(["A", "B", "C"].map(id => ({ id })));
+  assert.equal(p.getSnapshot().pinned.length, 0, "manual empty slots must not be filled automatically");
+  p.resetUsage(); assert.equal(p.getSnapshot().pinned.length, 0);
+});
+
+test("manual ordering survives malformed storage and temporarily removed plugins", () => {
+  const h = harness();
+  const p = h.createSidebarPreferences({ getItem: () => JSON.stringify({ pinned: ["C", "C", null, "A", "B", "D"], usage: {} }) });
+  assert.deepEqual(Array.from(p.getSnapshot().pinned), ["C", "A", "B"]);
+  let rows = h.partitionSidebarPanels(["A", "B", "D"].map(id => ({ id })), {}, p.getSnapshot().pinned);
+  assert.deepEqual(Array.from(rows.common, p => p.id), ["A", "B"]);
+  assert.deepEqual(Array.from(rows.more, p => p.id), ["D"]);
+  rows = h.partitionSidebarPanels(["A", "B", "C", "D"].map(id => ({ id })), { D: 100 }, p.getSnapshot().pinned);
+  assert.deepEqual(Array.from(rows.common, p => p.id), ["C", "A", "B"]);
+});
+
+test("favorites move up and down without changing membership or accepting unknown drag targets", () => {
+  const h = harness(), p = h.createSidebarPreferences(h.storage);
+  p.setPinned(["A", "B", "C"]); p.movePin("A", "C");
+  assert.deepEqual(Array.from(p.getSnapshot().pinned), ["B", "C", "A"]);
+  p.movePin("A", "B"); assert.deepEqual(Array.from(p.getSnapshot().pinned), ["A", "B", "C"]);
+  const same = p.getSnapshot(); p.movePin("D", "A"); p.movePin("A", undefined); p.movePin("A", "A");
+  assert.equal(p.getSnapshot(), same);
+});
+
+test("dragging favorites reorders the rail without accidentally navigating and supports keyboard moves", () => {
+  const h = harness(), selected = [];
+  const props = { panels: ["A", "B", "C", "D"].map(id => ({ id, label: id })), selectPanel: id => selected.push(id),
+    usePanelInfo: select => select({ activePanelId: null }), renderSlot: () => null };
+  let tree = h.component(h.SidebarRail, props);
+  const button = id => findTree(tree, n => n.props?.["data-dsv-sidebar-panel"] === id);
+  const data = new Map(), event = { dataTransfer: { setData: (key, value) => data.set(key, value) }, preventDefault() {}, stopPropagation() {} };
+  button("A").props.onDragStart(event); button("C").props.onDragOver(event); button("C").props.onDrop(event);
+  button("A").props.onClick(); assert.equal(selected.length, 0, "the click after a drag must not open the plugin");
+  assert.equal(data.get("application/x-dsv-sidebar-pin"), "A");
+  assert.deepEqual(Array.from(h.sidebarPreferences.getSnapshot().pinned), ["B", "C", "A"]);
+  h.runTimers(0); tree = h.component(h.SidebarRail, props);
+  button("A").props.onKeyDown({ ...event, altKey: true, key: "ArrowUp" });
+  assert.deepEqual(Array.from(h.sidebarPreferences.getSnapshot().pinned), ["B", "A", "C"]);
+  button("A").props.onClick(); assert.deepEqual(selected, ["A"]);
+  h.cleanup();
+});
+
+test("favorites manager lets users replace a pin and move it with accessible buttons", () => {
+  const h = harness(), panels = ["A", "B", "C", "D"].map(id => ({ id, label: id }));
+  const rail = h.component(h.SidebarRail, { panels, selectPanel() {}, usePanelInfo: fn => fn({ activePanelId: null }), renderSlot: () => null });
+  const Manager = findTree(rail, n => n.type?.name === "SidebarFavorites").type;
+  h.cleanup();
+  let tree = h.component(Manager, { open: true, onClose() {}, panels, renderSlot: () => null });
+  const choices = () => findTree(tree, n => n.props?.className === "dsv-favorites__choices");
+  const inputs = () => choices().children[0].map(n => findTree(n, n => n.type === "input"));
+  assert.equal(inputs()[3].props.disabled, true);
+  inputs()[1].props.onChange({ target: { checked: false } });
+  tree = h.component(Manager, { open: true, onClose() {}, panels, renderSlot: () => null });
+  assert.equal(inputs()[3].props.disabled, false); inputs()[3].props.onChange({ target: { checked: true } });
+  assert.deepEqual(Array.from(h.sidebarPreferences.getSnapshot().pinned), ["A", "C", "D"]);
+  assert.equal(h.component(Manager, { open: false, panels }), null);
+  h.cleanup();
+});
+
+test("collapsed rail changes only the sidebar grid track and preserves the native center and right tracks", () => {
+  const h = harness();
+  assert.equal(h.railColumns("0px minmax(400px, 1fr) minmax(0px, 480px)"), "56px minmax(400px, 1fr) minmax(0px, 480px)");
+  assert.equal(h.railColumns("320.5px minmax(0px, 1fr) minmax(0px, 0px)"), "56px minmax(0px, 1fr) minmax(0px, 0px)");
+  assert.equal(h.railColumns("unknown"), "");
+});
+
+test("collapsed plugin rail stays interactive and removes only its own frame changes on disposal", () => {
+  const h = harness(), properties = new Map(), attributes = new Set(["data-sidebar-collapsed", "data-sidebar-drawer"]);
+  const frame = { style: { gridTemplateColumns: "0px minmax(0px, 1fr) minmax(0px, 0px)",
+    getPropertyValue: name => properties.get(name), setProperty: (name, value) => properties.set(name, value), removeProperty: name => properties.delete(name) },
+    hasAttribute: name => attributes.has(name), setAttribute: name => attributes.add(name), removeAttribute: name => attributes.delete(name) };
+  const columnAttrs = new Set();
+  const column = { parentElement: frame, inert: true, setAttribute: name => columnAttrs.add(name), removeAttribute: name => columnAttrs.delete(name) };
+  const off = h.installPluginRail({ closest: () => ({ parentElement: column }) });
+  assert.equal(column.inert, false); assert.equal(properties.get("--dsv-rail-columns"), "56px minmax(0px, 1fr) minmax(0px, 0px)");
+  frame.style.gridTemplateColumns = "0px minmax(400px, 1fr) minmax(0px, 460px)";
+  h.mutations[0].callback();
+  assert.equal(properties.get("--dsv-rail-columns"), "56px minmax(400px, 1fr) minmax(0px, 460px)");
+  assert.equal(frame.style.gridTemplateColumns, "0px minmax(400px, 1fr) minmax(0px, 460px)", "the host keeps ownership of its inline geometry");
+  assert.equal(h.stateWrites, 0); assert.equal(h.mutations[0].targets.length, 2);
+  off(); assert.equal(properties.size, 0); assert.equal(attributes.has("data-dsv-plugin-rail"), false); assert.equal(columnAttrs.size, 0);
+  assert.equal(column.inert, true, "return control of a hidden native drawer to its host");
+  assert.equal(h.mutations[0].targets.length, 0);
+});
+
+test("Ctrl+B ignores hidden skin dialogs but respects visible modals and sidebar drawers", () => {
+  const h = harness(), listeners = new Set(), calls = [];
+  let modals = [];
+  const original = context => { calls.push(context); return { status: context.modal === null || context.modal === "sidebar" ? "handled" : "pass" }; };
+  const command = { resolve: original }, commands = new Map([["sidebar.left.toggle", command]]);
+  const ctx = { shortcuts: { registry: { commands }, catalog: { subscribe: fn => { listeners.add(fn); return () => listeners.delete(fn); } } } };
+  const node = (width, visible = true, modal) => ({ hidden: false, getAttribute: () => null, checkVisibility: () => visible, getBoundingClientRect: () => ({ width, height: width }), dataset: { shortcutModal: modal } });
+  h.document.querySelectorAll = () => modals;
+  const off = h.installSidebarShortcut(ctx), target = {};
+  modals = [node(0), node(100, false)];
+  assert.equal(command.resolve({ modal: "other", region: "editable", target }).status, "handled");
+  assert.equal(calls.at(-1).target, target); assert.equal(calls.at(-1).region, "editable");
+  modals = [node(100), node(0)];
+  assert.equal(command.resolve({ modal: "other" }).status, "pass", "a real modal must keep focus and keyboard ownership");
+  modals = [node(100, true, "sidebar"), node(0)];
+  assert.equal(command.resolve({ modal: "other" }).status, "handled", "the visible sidebar wins over a later hidden skin dialog");
+  off(); assert.equal(command.resolve, original); assert.equal(listeners.size, 0);
+});
+
+test("shortcut bridge follows host command replacement and does not overwrite another extension on disposal", () => {
+  const h = harness(), listeners = new Set(), commands = new Map();
+  const ctx = { shortcuts: { registry: { commands }, catalog: { subscribe: fn => { listeners.add(fn); return () => listeners.delete(fn); } } } };
+  const first = { resolve: () => ({ status: "pass" }) }, firstOriginal = first.resolve;
+  const second = { resolve: () => ({ status: "handled" }) }, secondOriginal = second.resolve;
+  commands.set("sidebar.left.toggle", first); const off = h.installSidebarShortcut(ctx);
+  commands.set("sidebar.left.toggle", second); for (const fn of listeners) fn();
+  assert.equal(first.resolve, firstOriginal); assert.notEqual(second.resolve, secondOriginal);
+  const later = () => ({ status: "blocked" }); second.resolve = later; off();
+  assert.equal(second.resolve, later); assert.equal(listeners.size, 0);
+});
+
+test("workspace folding restores the user's expanded width and leaves the plugin rail at 56px", () => {
+  const h = harness(), widths = [];
+  h.runtime.layout = { panels: { setSidebar: width => widths.push(width) } };
+  const props = { collapsed: false, width: 320, drawer: false, startSession() {}, toggleSidebar() {}, selectPanel() {},
+    useRemoteAccess: () => false, usePanels: select => select([]), usePanelInfo: select => select({ activePanelId: null }), renderSlot: () => null };
+  h.component(h.CompactSidebar, props);
+  const folded = h.component(h.CompactSidebar, { ...props, collapsed: true, width: 0 });
+  assert.equal(folded.props.style.width, "56px");
+  h.component(h.CompactSidebar, { ...props, width: 280 });
+  assert.deepEqual(widths, [320]); h.component(h.CompactSidebar, props); assert.deepEqual(widths, [320]); h.cleanup();
+});
+
+test("workspace icon is a separate accessible rail control sharing the native fold action", () => {
+  const h = harness(), toggles = [];
+  const props = { collapsed: false, width: 280, drawer: false, startSession() {}, toggleSidebar: () => toggles.push(1), selectPanel() {},
+    useRemoteAccess: () => false, usePanels: select => select([]), usePanelInfo: select => select({ activePanelId: null }), renderSlot: () => null };
+  let tree = h.component(h.CompactSidebar, props);
+  let button = findTree(tree, n => n.props?.["data-dsv-workspace-button"] !== undefined);
+  assert.equal(button.props["aria-label"], "workspaceEntry");
+  assert.equal(button.props["aria-expanded"], true);
+  const workspaces = findTree(tree, n => n.props?.className === "dsv-sidebar__workspaces");
+  assert.equal(button.props["aria-controls"], workspaces.props.id);
+  button.props.onClick(); assert.equal(toggles.length, 1);
+  tree = h.component(h.CompactSidebar, { ...props, collapsed: true, width: 0 });
+  button = findTree(tree, n => n.props?.["data-dsv-workspace-button"] !== undefined);
+  assert.equal(button.props["aria-expanded"], false); assert.equal(button.props.title, "sidebarExpand");
+  button.props.onClick(); assert.equal(toggles.length, 2);
+  assert.equal(h.writes.length, 0, "the workspace control must not change the selected conversation");
+  h.cleanup();
 });

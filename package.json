@@ -1,6 +1,6 @@
 {
   "name": "dsh-splitview",
-  "version": "0.2.1",
+  "version": "0.4.2",
   "private": true,
   "type": "module",
   "main": "index.js",
@@ -38,6 +38,8 @@
       "immediately": true,
       "inject": [
         "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-sidebar",
+        "@deepseek-ai/dsh-client-ui-primitives",
         "@deepseek-ai/dsh-client-ui-conversation",
         "@deepseek-ai/dsh-client-locale",
         "@deepseek-ai/dsh-client-ui-renderer",

@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Split View",
-    "description": "VSCode-style tabs and splits: open several sessions side by side in the central panel, drag tabs between groups, drag dividers to resize, and the layout is saved automatically."
+    "description": "VSCode-style tabs and splits with saved layouts. Pin up to 3 plugins in a compact icon rail, drag to reorder, and find the rest in More. A spacious workspace list keeps conversations organized."
   }
 }

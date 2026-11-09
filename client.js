@@ -37,6 +37,8 @@ window.__ModuleLoader__.load({
 		Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
 
 		const React = require("react");
+		const { createPortal } = require("react-dom");
+		const SidebarUI = require("@deepseek-ai/dsh-client-ui-primitives");
 		const h = React.createElement;
 		const PaneContext = React.createContext(null);
 
@@ -117,6 +119,8 @@ window.__ModuleLoader__.load({
 .dsv-tabbody{display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden}
 .dsv-tabbody[hidden]{display:none}
 .dsv-tabbody>*{flex:1 1 0;min-width:0;min-height:0}
+.dsv-tab-mount{display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden}
+.dsv-tab-mount>*{flex:1 1 0;min-width:0;min-height:0}
 .dsv-resizer{flex:0 0 6px;position:relative;background:transparent;touch-action:none}
 .dsv-resizer::after{content:"";position:absolute;background:var(--dsw-alias-border-l3);opacity:.55}
 .dsv-node[data-orientation="row"]>.dsv-resizer{cursor:col-resize}
@@ -189,6 +193,92 @@ window.__ModuleLoader__.load({
 .dsv-set__keys{display:flex;flex-direction:column;gap:6px;font-size:12px;line-height:1.6;color:var(--dsw-alias-label-caption)}
 .dsv-set__keys div{display:flex;gap:8px;align-items:center}
 .dsv-set__hint{font-size:12px;line-height:1.6;color:var(--dsw-alias-label-caption);padding-top:4px;border-top:1px solid var(--dsw-alias-border-l3)}
+.dsv-sidebar{display:flex;flex:none;min-height:0;height:100%;max-width:100%;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);font-family:inherit}
+.dsv-sidebar__rail{display:flex;flex-direction:column;align-items:center;flex:0 0 56px;min-height:0;border-right:1px solid var(--dsw-alias-border-l3);box-sizing:border-box;padding:8px 0;gap:8px}
+.dsv-sidebar__icon{display:flex;align-items:center;justify-content:center;flex:none;width:36px;height:36px;padding:0;border:0;border-radius:9px;background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer;-webkit-app-region:no-drag}
+.dsv-sidebar__icon:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.dsv-sidebar__icon[aria-current=page],.dsv-sidebar__icon[aria-expanded=true],.dsv-sidebar__icon[data-active=true]{color:var(--dsw-alias-state-business-primary,#4d6bfe);background:var(--dsw-alias-interactive-bg-hover-accent,var(--dsw-alias-interactive-bg-hover))}
+.dsv-sidebar__icon:focus-visible,.dsv-sidebar__new:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary,#4d6bfe);outline-offset:2px}
+.dsv-sidebar__icon:disabled{opacity:.4;cursor:default}
+.dsv-sidebar__brand{margin-bottom:4px;color:var(--dsw-alias-label-primary)}
+.dsv-sidebar__nav{display:flex;flex-direction:column;align-items:center;gap:4px;flex:1;min-height:0;overflow-y:auto;scrollbar-width:none;width:100%}
+.dsv-sidebar__nav::-webkit-scrollbar{display:none}
+.dsv-sidebar__foot{display:flex;flex:none;flex-direction:column;align-items:center;width:100%;gap:4px}
+.dsv-sidebar__foot>[data-slot]{max-width:100%}
+.dsv-sidebar__workspaces{display:flex;flex-direction:column;flex:1;min-width:0;min-height:0;overflow:hidden}
+.dsv-sidebar__workspaces[hidden]{display:none}
+/* The host normally collapses Windows/macOS sidebars to zero. Only the
+   workspace column folds here; retain the plugin rail and the host's right track.
+   Specificity also overrides skins that hide every collapsed-sidebar child. */
+[data-dsv-plugin-rail][data-sidebar-collapsed]{grid-template-columns:var(--dsv-rail-columns)!important;--dsh-windows-sidebar-width:56px!important}
+[data-dsv-plugin-rail][data-sidebar-collapsed]>[data-dsv-sidebar-column]{width:56px!important;min-width:56px;display:flex!important;transform:none!important;pointer-events:auto!important;visibility:visible!important;opacity:1!important}
+html [data-dsv-plugin-rail][data-sidebar-collapsed]>[data-dsv-sidebar-column]>[data-slot=sidebar]>.dsv-sidebar.dsv-sidebar{width:56px!important;max-width:56px;display:flex!important;visibility:visible!important}
+html [data-dsv-plugin-rail][data-sidebar-collapsed]>[data-dsv-sidebar-column]>[data-slot=sidebar]>.dsv-sidebar.dsv-sidebar>.dsv-sidebar__rail{display:flex!important;pointer-events:auto!important;visibility:visible!important}
+html [data-dsv-plugin-rail][data-sidebar-collapsed]>[data-dsv-sidebar-column]>[data-slot=sidebar]>.dsv-sidebar.dsv-sidebar>.dsv-sidebar__rail>*{display:flex!important;pointer-events:auto!important;visibility:visible!important}
+.dsv-sidebar__new{display:flex;align-items:center;justify-content:center;gap:7px;flex:none;height:36px;margin:12px 12px 14px;padding:0 12px;border:1px solid var(--dsw-alias-border-l3);border-radius:10px;color:inherit;background:var(--dsw-alias-bg-layer-1);font:inherit;font-size:13px;cursor:pointer;-webkit-app-region:no-drag}
+.dsv-sidebar__new:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.dsv-sidebar__region{display:flex;flex:1;min-width:0;min-height:0}
+.dsv-sidebar__region>[data-slot]{flex:1;min-width:0;min-height:0}
+.dsv-sidebar__region>[data-slot]>:first-child{min-width:0;width:100%;max-width:100%}
+.dsv-sidebar__region>[data-slot]>:first-child>:first-child{min-width:0;max-width:100%;box-sizing:border-box;gap:4px}
+.dsv-sidebar-menu{min-width:228px;max-width:min(300px,calc(100vw - 24px));max-height:calc(100dvh - 40px);overflow-y:auto}
+.dsv-sidebar-menu__title{padding:7px 10px 6px;font-size:11px;line-height:1.5;color:var(--dsw-alias-label-caption);user-select:none}
+.dsv-sidebar-menu__label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dsv-sidebar-menu__extensions{border-top:1px solid var(--dsw-alias-border-l3);margin-top:4px;padding-top:4px}
+.dsv-sidebar__icon[draggable=true]{cursor:grab}
+.dsv-sidebar__icon[draggable=true]:active{cursor:grabbing}
+.dsv-sidebar__icon[data-dsv-pin-drop=true]{box-shadow:inset 0 -2px var(--dsw-alias-state-business-primary,#4d6bfe)}
+.dsv-sidebar__empty-pin{border:1px dashed var(--dsw-alias-border-l3);font-size:20px;opacity:.65}
+.dsv-sidebar__toggle[aria-expanded=true]{color:var(--dsw-alias-label-secondary);background:transparent}
+.dsv-sidebar__workspace-entry{position:relative;margin-bottom:4px}
+.dsv-sidebar__workspace-entry[aria-expanded=true]::before{content:"";position:absolute;left:-10px;top:10px;bottom:10px;width:2px;border-radius:2px;background:var(--dsw-alias-state-business-primary,#4d6bfe)}
+/* Keep native workspace behavior and style only its compact-sidebar instance.
+   data-row-key and ARIA roles identify rows; module suffixes style decoration. */
+.dsv-sidebar__region [class*="_sectionHeader"]{margin:0 12px 10px;padding:0!important;width:calc(100% - 24px);height:30px;gap:2px!important}
+.dsv-sidebar__region [class*="_sectionLabel"]{font-size:11px;font-weight:600;letter-spacing:.06em;color:var(--dsw-alias-label-tertiary)}
+.dsv-sidebar__region [class*="_sectionHeader"] button{width:24px;height:26px}
+.dsv-sidebar__region [class*="_sectionHeader"] [class*="_headerActions"]{gap:0}
+.dsv-sidebar__region [class*="_searchSlot"]{min-width:24px;flex:1 1 0%}
+.dsv-sidebar__region [class*="_searchSlot"]>[class*="_search"]{min-width:0;max-width:100%}
+.dsv-sidebar__region [role=tree]{padding:0 8px 20px;box-sizing:border-box}
+.dsv-sidebar__region [class*="_groupSection"]{margin-bottom:14px}
+.dsv-sidebar__region [data-row-key]{box-sizing:border-box;border-radius:8px;min-width:0;max-width:100%}
+.dsv-sidebar__region [data-row-key^="workspace:"]{height:32px;padding:0 8px;gap:6px;margin-bottom:3px}
+.dsv-sidebar__region [data-row-key^="workspace:"] [class*="_title"]{font-size:12px;line-height:18px;font-weight:600;color:var(--dsw-alias-label-secondary)}
+.dsv-sidebar__region [data-row-key^="session:"]{height:35px;margin:2px 0 2px 10px;padding:0 8px 0 10px;width:calc(100% - 10px);gap:6px}
+.dsv-sidebar__region [data-row-key^="session:"] [class*="_title"]{font-size:13px;line-height:20px;font-weight:400;color:var(--dsw-alias-label-secondary)}
+.dsv-sidebar__region [data-row-key^="session:"][aria-selected=true]{background:color-mix(in srgb,var(--dsw-alias-state-business-primary,#4d6bfe) 11%,transparent);box-shadow:inset 2px 0 var(--dsw-alias-state-business-primary,#4d6bfe)}
+.dsv-sidebar__region [data-row-key^="session:"][aria-selected=true] [class*="_title"]{color:var(--dsw-alias-label-primary);font-weight:500}
+.dsv-sidebar__region [data-row-key] [class*="_timestamp"]{font-size:10px;opacity:.6}
+.dsv-sidebar__region [class*="_rowQuickActions"]{display:none}
+.dsv-sidebar__region [data-row-key] [class*="_rowActions"] button{width:24px;height:24px}
+.dsv-favorites{width:480px;max-width:calc(100vw - 32px);max-height:calc(100dvh - 32px);overflow-y:auto}
+.dsv-favorites[role=dialog]{background:light-dark(#fcfcfd,#20252e)!important;box-shadow:0 24px 80px #0005}
+.dsv-favorites p{font-size:12px;line-height:1.6}
+.dsv-favorites__heading{display:flex;align-items:center;justify-content:space-between;margin:2px 0 10px;font-size:12px;font-weight:600;color:var(--dsw-alias-label-secondary)}
+.dsv-favorites__heading [role=status]{font-weight:400;font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-tertiary)}
+.dsv-favorites__order{display:flex;flex-direction:column;gap:6px;padding:0;margin:0 0 22px;list-style:none}
+.dsv-favorites__row{display:flex;align-items:center;gap:9px;min-height:42px;padding:0 10px;border:1px solid var(--dsw-alias-border-l3);border-radius:9px;background:var(--dsw-alias-bg-layer-1);cursor:grab}
+.dsv-favorites__row[data-dsv-pin-drop=true]{border-color:var(--dsw-alias-state-business-primary,#4d6bfe);box-shadow:0 2px var(--dsw-alias-state-business-primary,#4d6bfe)}
+.dsv-favorites__grip{color:var(--dsw-alias-label-tertiary);font-size:18px;user-select:none}
+.dsv-favorites__glyph{display:flex;align-items:center;justify-content:center;flex:none;width:22px;color:var(--dsw-alias-label-secondary)}
+.dsv-favorites__name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}
+.dsv-favorites__small{display:flex;align-items:center;justify-content:center;flex:none;width:26px;height:26px;padding:0;border:0;border-radius:6px;color:var(--dsw-alias-label-secondary);background:transparent;cursor:pointer;font-size:14px}
+.dsv-favorites__small:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.dsv-favorites__small:disabled{opacity:.25;cursor:default}
+.dsv-favorites__empty{display:flex;align-items:center;justify-content:center;min-height:42px;border:1px dashed var(--dsw-alias-border-l3);border-radius:9px;font-size:12px;color:var(--dsw-alias-label-tertiary)}
+.dsv-favorites__choices{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+.dsv-favorites__choice{display:flex;align-items:center;gap:8px;min-width:0;padding:10px 9px;border:1px solid transparent;border-radius:8px;cursor:pointer}
+.dsv-favorites__choice:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.dsv-favorites__choice[data-selected=true]{border-color:var(--dsw-alias-border-l3);background:var(--dsw-alias-bg-layer-1)}
+.dsv-favorites__choice input{accent-color:var(--dsw-alias-state-business-primary,#4d6bfe);cursor:pointer}
+.dsv-favorites__choice:has(input:disabled){opacity:.45;cursor:default}
+.dsv-favorites__hint{margin:12px 0 0;font-size:11px;line-height:1.6;color:var(--dsw-alias-label-tertiary)}
+.dsv-favorites__footer{display:flex;justify-content:space-between;gap:12px;width:100%}
+.dsv-favorites__secondary,.dsv-favorites__done{height:32px;padding:0 12px;border:1px solid var(--dsw-alias-border-l3);border-radius:8px;background:transparent;color:inherit;font:inherit;font-size:12px;cursor:pointer}
+.dsv-favorites__done{background:var(--dsw-alias-state-business-primary,#4d6bfe);border-color:transparent;color:white}
+.dsv-favorites button:focus-visible,.dsv-favorites input:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary,#4d6bfe);outline-offset:2px}
+@media(max-width:480px){.dsv-favorites__choices{grid-template-columns:minmax(0,1fr)}}
 `;
 		let stylesInstalled = false;
 		function installStyles() {
@@ -689,7 +779,7 @@ window.__ModuleLoader__.load({
 		//#endregion
 
 		//#region runtime wiring
-		const runtime = { ctx: null, sessions: null, uiWorkspace: null, t: null };
+		const runtime = { ctx: null, sessions: null, uiWorkspace: null, layout: null, t: null };
 
 		function useLayout() {
 			return React.useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
@@ -945,10 +1035,11 @@ window.__ModuleLoader__.load({
 		function WidthControls(props) {
 			const container = props.container;
 			const phase = props.phase;
+			const pane = React.useContext(PaneContext);
+			const active = !pane || pane.active !== false;
 
-			const publishWidths = React.useCallback((element) => {
+			const publishWidths = React.useCallback((element, column = element.offsetWidth) => {
 				const target = element.parentElement || element;
-				const column = element.offsetWidth;
 				target.style.setProperty("--dsh-conversation-column-width", column + "px");
 				const preference = readWidthPreference();
 				if (preference === null) target.style.removeProperty("--dsh-chat-user-width");
@@ -956,13 +1047,25 @@ window.__ModuleLoader__.load({
 			}, []);
 
 			React.useLayoutEffect(() => {
-				if (!container) return undefined;
-				publishWidths(container);
-				if (typeof ResizeObserver === "undefined") return undefined;
-				const observer = new ResizeObserver(() => publishWidths(container));
+				if (!container || !active) return undefined;
+				if (typeof ResizeObserver === "undefined") { publishWidths(container); return undefined; }
+				let frame = 0, nextColumn = null, lastColumn = null;
+				const observer = new ResizeObserver((entries) => {
+					const entry = entries.find((item) => item.target === container);
+					const size = entry && entry.borderBoxSize;
+					const width = Array.isArray(size) ? size[0]?.inlineSize : size?.inlineSize;
+					nextColumn = Math.round(Number.isFinite(width) ? width : container.offsetWidth);
+					if (nextColumn === lastColumn || frame) return;
+					frame = requestAnimationFrame(() => {
+						frame = 0;
+						if (nextColumn === lastColumn) return;
+						lastColumn = nextColumn;
+						publishWidths(container, nextColumn);
+					});
+				});
 				observer.observe(container);
-				return () => observer.disconnect();
-			}, [container, publishWidths]);
+				return () => { observer.disconnect(); cancelAnimationFrame(frame); };
+			}, [container, publishWidths, active]);
 
 			const onStart = React.useCallback(() => (container ? resolveContentWidth(container.offsetWidth, readWidthPreference()) : 680), [container]);
 			const onDrag = React.useCallback(
@@ -987,7 +1090,7 @@ window.__ModuleLoader__.load({
 				if (container) publishWidths(container);
 			}, [container, publishWidths]);
 
-			if (!container || phase !== "active") return null;
+			if (!container || !active || phase !== "active") return null;
 			return ["left", "right"].map((side) => h(WidthHandle, { key: side, side, onStart, onDrag, onCommit, onEnd }));
 		}
 		//#endregion
@@ -1071,16 +1174,22 @@ window.__ModuleLoader__.load({
 				const box = node.getBoundingClientRect();
 				return node.getAttribute("data-chat-flow-kind") !== "turn-process" && box.height > 0 && box.bottom > edge && box.top < edge + scroller.clientHeight;
 			});
+			const disclosures = [], rows = new Map();
+			for (const control of scroller.querySelectorAll("button[aria-expanded]:not([aria-haspopup]),details")) {
+				const row = control.closest("[data-chat-anchor-key]");
+				if (!row) continue;
+				// Controls arrive in DOM order, including nested anchors. Count only
+				// controls owned by this row instead of rescanning it for each one.
+				const index = rows.get(row) || 0;
+				rows.set(row, index + 1);
+				disclosures.push({ key: row.getAttribute("data-chat-anchor-key"), index, open: control.tagName === "DETAILS" ? control.open : control.getAttribute("aria-expanded") === "true" });
+				if (disclosures.length === 64) break;
+			}
 			return {
 				top, bottom: scroller.scrollHeight - scroller.clientHeight - top <= 32,
 				anchorKey: anchor ? anchor.getAttribute("data-chat-anchor-key") : null,
 				anchorTop: anchor ? anchor.getBoundingClientRect().top - edge : 0,
-				disclosures: [...scroller.querySelectorAll("button[aria-expanded]:not([aria-haspopup]),details")].flatMap((control) => {
-					const row = control.closest("[data-chat-anchor-key]");
-					if (!row) return [];
-					const controls = [...row.querySelectorAll("button[aria-expanded]:not([aria-haspopup]),details")].filter((item) => item.closest("[data-chat-anchor-key]") === row);
-					return [{ key: row.getAttribute("data-chat-anchor-key"), index: controls.indexOf(control), open: control.tagName === "DETAILS" ? control.open : control.getAttribute("aria-expanded") === "true" }];
-				}).slice(0, 64),
+				disclosures,
 			};
 		}
 
@@ -1088,13 +1197,24 @@ window.__ModuleLoader__.load({
 			if (!scroller || scroller.clientHeight <= 0) return false;
 			const anchors = new Map([...scroller.querySelectorAll("[data-chat-anchor-key]")].map((node) => [node.getAttribute("data-chat-anchor-key"), node]));
 			if (requireAnchor && !saved.bottom && saved.anchorKey && !anchors.has(saved.anchorKey)) return false;
+			const controlsByRow = new Map();
 			for (const state of saved.disclosures || []) {
 				const row = anchors.get(state.key);
 				if (!row) continue;
-				const control = [...row.querySelectorAll("button[aria-expanded]:not([aria-haspopup]),details")].filter((item) => item.closest("[data-chat-anchor-key]") === row)[state.index];
+				let controls = controlsByRow.get(row);
+				if (!controls) {
+					controls = [...row.querySelectorAll("button[aria-expanded]:not([aria-haspopup]),details")].filter((item) => item.closest("[data-chat-anchor-key]") === row);
+					controlsByRow.set(row, controls);
+				}
+				const control = controls[state.index];
 				if (!control) continue;
 				if (control.tagName === "DETAILS") control.open = state.open;
-				else if ((control.getAttribute("aria-expanded") === "true") !== state.open) control.click();
+				else if ((control.getAttribute("aria-expanded") === "true") !== state.open) {
+					control.click();
+					// Expansion may synchronously replace controls in this or a
+					// nested row. Reuse a scan only while the DOM is unchanged.
+					controlsByRow.clear();
+				}
 			}
 			if (saved.bottom) scroller.scrollTop = scroller.scrollHeight - scroller.clientHeight;
 			else {
@@ -1110,12 +1230,17 @@ window.__ModuleLoader__.load({
 		function ReadingTab(props) {
 			const { tab, active, children } = props;
 			const root = React.useRef(null);
+			const mount = React.useRef(null);
+			if (!mount.current) {
+				mount.current = document.createElement("div");
+				mount.current.className = "dsv-tab-mount";
+			}
 			const key = tab.id + ":" + (tab.sessionId || "picker");
 			React.useLayoutEffect(() => {
 				const node = root.current;
 				if (!node || !active || !tab.sessionId) return undefined;
 				const saved = readingMemory.get(key);
-				let restoring = Boolean(saved), frame = 0, settled = 0, historyPending = false, historyAttempted = false;
+				let restoring = Boolean(saved), frame = 0, captureFrame = 0, settled = 0, historyPending = false, historyAttempted = false, scrollIntentUntil = 0;
 				let observer = null, resize = null, watchTarget = null;
 				const scroller = () => node.querySelector("[data-conversation-scroll]");
 				const capture = () => {
@@ -1123,7 +1248,13 @@ window.__ModuleLoader__.load({
 					const value = captureReading(scroller());
 					if (value) readingMemory.put(key, { ...value, historySeq: loadedHistorySeq(tab.sessionId) });
 				};
-				const stop = () => {
+				const queueCapture = () => {
+					if (restoring || captureFrame) return;
+					captureFrame = requestAnimationFrame(() => { captureFrame = 0; capture(); });
+				};
+				const stop = (event) => {
+					const body = event && scroller();
+					if (body && (event.target === body || body.contains?.(event.target))) scrollIntentUntil = Date.now() + 1000;
 					restoring = false; cancelAnimationFrame(frame); clearTimeout(settled);
 					if (observer) observer.disconnect(); if (resize) resize.disconnect();
 				};
@@ -1158,29 +1289,55 @@ window.__ModuleLoader__.load({
 				};
 				const onScroll = (event) => {
 					if (event.target !== scroller()) return;
-					if (restoring) restore(); else capture();
+					// Native scroll anchoring also emits scroll during a width change.
+					// Measuring anchors then forces a synchronous layout on every step
+					// of the sidebar animation. Tab/page exit still captures final state.
+					if (restoring) restore(); else if (Date.now() <= scrollIntentUntil) queueCapture();
 				};
-				const onDisclosure = () => { requestAnimationFrame(capture); };
+				const onDisclosure = (event) => {
+					if (event?.target?.closest?.(".dsv-native-header")) return;
+					scrollIntentUntil = Date.now() + 1000;
+					queueCapture();
+				};
 				node.addEventListener("scroll", onScroll, true);
 				node.addEventListener("click", onDisclosure);
 				node.addEventListener("toggle", onDisclosure, true);
 				for (const name of ["wheel", "pointerdown", "keydown"]) node.addEventListener(name, stop, true);
-				observer = new MutationObserver(restore);
-				observer.observe(node, { childList: true, subtree: true, attributes: true, attributeFilter: ["open", "aria-expanded"] });
-				resize = new ResizeObserver(restore);
-				const deadline = setTimeout(stop, OPEN_TIMEOUT_MS);
+				if (restoring) {
+					observer = new MutationObserver(restore);
+					observer.observe(node, { childList: true, subtree: true, attributes: true, attributeFilter: ["open", "aria-expanded"] });
+					resize = new ResizeObserver(restore);
+				}
+				const deadline = restoring ? setTimeout(stop, OPEN_TIMEOUT_MS) : null;
 				readingCaptures.add(capture);
 				restore();
 				return () => {
 					capture(); readingCaptures.delete(capture);
-					stop(); clearTimeout(deadline);
+					stop(); cancelAnimationFrame(captureFrame); clearTimeout(deadline);
 					node.removeEventListener("scroll", onScroll, true);
 					node.removeEventListener("click", onDisclosure);
 					node.removeEventListener("toggle", onDisclosure, true);
 					for (const name of ["wheel", "pointerdown", "keydown"]) node.removeEventListener(name, stop, true);
 				};
 			}, [key, active]);
-			return h("div", { ref: root, className: "dsv-tabbody", id: "dsv-panel-" + tab.id, role: "tabpanel", "aria-labelledby": "dsv-tab-" + tab.id, hidden: !active, "data-dsv-tab-body": tab.id }, children);
+			// Keep the portal target stable, so parking never remounts the native
+			// editor or conversation. Detached hidden trees do not participate in
+			// document-wide selectors, style invalidation or sidebar reflow.
+			// This effect follows reading memory: cleanup captures while the old
+			// tab is still attached and visible, before parking removes its DOM.
+			React.useLayoutEffect(() => {
+				const node = root.current, target = mount.current;
+				if (!node) return undefined;
+				// Detaching embedded pages destroys their browsing context. Keep
+				// pages and media attached, including across effect cleanup.
+				const embedded = () => target.querySelector?.("iframe,webview,video,audio");
+				node.hidden = !active;
+				if (active || embedded()) {
+					if (target.parentNode !== node) node.appendChild(target);
+				} else target.remove();
+				return () => { if (!embedded()) target.remove(); };
+			}, [active]);
+			return h("div", { ref: root, className: "dsv-tabbody", id: "dsv-panel-" + tab.id, role: "tabpanel", "aria-labelledby": "dsv-tab-" + tab.id, "aria-hidden": !active, "data-dsv-tab-body": tab.id }, createPortal(children, mount.current));
 		}
 		//#endregion
 
@@ -1199,7 +1356,7 @@ window.__ModuleLoader__.load({
 			});
 		}
 
-		/** Mirror native header and attachment registrations into our namespace. Keep the
+		/** Mirror native header, attachment and sidebar registrations into our namespace. Keep the
 		 * host's components, scoped stores, injections and extension entries; only
 		 * child slot names change, so ownership stays with the original plugin. */
 		function installNativeHeader(ctx) {
@@ -1224,6 +1381,7 @@ window.__ModuleLoader__.load({
 					visit("conversation.header");
 					visit("conversation.session");
 					visit("conversation.input.attachments");
+					for (const name of ["sidebar.brand.mark", "sidebar.brand.name", "sidebar.toggle.badge", "sidebar.panellist", "sidebar.panellist.actions", "sidebar.workspaces", "sidebar.settings", "sidebar.footer.action"]) visit(name);
 					// Release obsolete declarations before installing their replacements.
 					for (const [entry, dispose] of [...mirrors].reverse()) if (!wanted.has(entry)) { dispose(); mirrors.delete(entry); }
 					for (const [entry, name] of wanted) {
@@ -1265,8 +1423,8 @@ window.__ModuleLoader__.load({
 		 * renderer hands it the owning session's scoped hooks.
 		 */
 		function PaneBody(props) {
-			const { renderFactorySlot, renderSlot, useSession, useSessions, useConversation, sessionId, tabId } = props;
-			const pane = React.useMemo(() => ({ renderSlot, tabId, readingKey: tabId + ":" + sessionId }), [renderSlot, tabId, sessionId]);
+			const { renderFactorySlot, renderSlot, useSession, useSessions, useConversation, sessionId, tabId, active = true } = props;
+			const pane = React.useMemo(() => ({ renderSlot, tabId, active, readingKey: tabId + ":" + sessionId }), [renderSlot, tabId, sessionId, active]);
 			// Every one of these is a uSES selector hook built by the renderer
 			// (bindSnapshotSelector): the selector is mandatory, so pass an identity
 			// function when we want the whole snapshot.
@@ -1288,7 +1446,7 @@ window.__ModuleLoader__.load({
 			}
 
 			return h(PaneContext.Provider, { value: pane }, h("div", { className: "dsv-conversation-shell" },
-				h("div", { className: "dsv-native-header" }, renderSlot("splitview.hostHeader", {})),
+				active ? h("div", { className: "dsv-native-header" }, renderSlot("splitview.hostHeader", {})) : null,
 				renderFactorySlot("conversation.content", { variant: "embedded", phase, hero }, { slots: { views: NativePaneViews, widthControls: WidthControls } })));
 		}
 
@@ -1299,24 +1457,26 @@ window.__ModuleLoader__.load({
 				if (!status || status.kind !== "held") return undefined;
 				const reference = status.reference;
 				let cancelled = false;
+				const ready = () => {
+					clearTimeout(timer);
+					React.startTransition(() => {
+						if (!cancelled) setResult({ status, kind: "ready" });
+					});
+				};
 				const timer = setTimeout(() => {
 					if (!cancelled) setResult({ status, kind: "failed", message: runtime.t("loadTimeout") });
 				}, OPEN_TIMEOUT_MS);
 				const promise = reference && reference.ready;
 				if (promise && typeof promise.then === "function") {
 					promise.then(
-						() => {
-							clearTimeout(timer);
-							if (!cancelled) setResult({ status, kind: "ready" });
-						},
+						ready,
 						(error) => {
 							clearTimeout(timer);
 							if (!cancelled) setResult({ status, kind: "failed", message: describeError(error) });
 						},
 					);
 				} else {
-					clearTimeout(timer);
-					setResult({ status, kind: "ready" });
+					ready();
 				}
 				return () => {
 					cancelled = true;
@@ -1346,6 +1506,23 @@ window.__ModuleLoader__.load({
 			const SessionProvider = props.SessionProvider;
 			if (typeof SessionProvider !== "function") return h("div", { className: "dsv-empty" }, t("conversationUnavailable"));
 			return h(SessionProvider, { session: status.reference }, children);
+		}
+
+		/** Layout changes must not recreate native slot owner props for every
+		 * retained tab. Native session hooks still deliver live content updates. */
+		function TabContent({ groupId, tabId, sessionId, active, status, renderSlot, SessionProvider, retrySession }) {
+			return React.useMemo(() => {
+				if (!sessionId) return h(SessionPicker, {
+					onPick: (picked) => {
+						if (typeof picked === "string" && picked !== "") store.actions.setSession(groupId, tabId, picked);
+					},
+				});
+				return h(SessionHost, {
+					key: sessionId, status, SessionProvider,
+					onRetry: () => retrySession(sessionId),
+					onChoose: () => store.actions.setSession(groupId, tabId, null),
+				}, renderSlot("splitview.pane", { groupId, tabId, active }, { only: "body" }));
+			}, [groupId, tabId, sessionId, active, status, renderSlot, SessionProvider, retrySession]);
 		}
 		//#endregion
 
@@ -1592,6 +1769,22 @@ window.__ModuleLoader__.load({
 			return h("div", { className: "dsv-seat", "data-dsv-seat": "" });
 		}
 
+		// Geometry belongs to the DOM: publishing it as React state invalidates
+		// every retained conversation on each frame of a sidebar animation.
+		function placeBox(element, box) {
+			if (!element) return;
+			if (box) for (const key of ["left", "top", "width", "height"]) {
+				const value = box[key] + "px";
+				if (element.style[key] !== value) element.style[key] = value;
+			}
+			const visibility = box ? "visible" : "hidden";
+			if (element.style.visibility !== visibility) element.style.visibility = visibility;
+		}
+
+		function paneLayoutKey(node) {
+			return node.type === "group" ? node.id : node.id + ":" + node.orientation + ":" + node.sizes.join(",") + "[" + node.children.map(paneLayoutKey).join("|") + "]";
+		}
+
 		/** Keep conversation trees in a root-scoped slot. The host's main slot
 		 * remounts on each session change; it owns only the measured empty seat.
 		 * A fixed surface also keeps pointer capture alive during a pane drag. */
@@ -1600,12 +1793,33 @@ window.__ModuleLoader__.load({
 			const subscribe = React.useCallback((fn) => selection ? selection.subscribe(fn) : currentList().subscribe(fn), [selection]);
 			const getSession = React.useCallback(() => selection ? selection.getSnapshot().sessionId : mainViewSession(), [selection]);
 			const mainSessionId = React.useSyncExternalStore(subscribe, getSession, getSession);
-			const [bounds, setBounds] = React.useState(null);
+			const surfaceRef = React.useRef(null);
+			const content = React.useMemo(() => h(Takeover, {
+				renderSlot: props.renderSlot, SessionProvider: props.SessionProvider, sessionId: mainSessionId,
+			}), [props.renderSlot, props.SessionProvider, mainSessionId]);
 			React.useLayoutEffect(() => {
 				let seat = null, frame = 0;
+				const panelInfo = runtime.layout && runtime.layout.panelInfo;
+				const conversationActive = () => panelInfo?.getSnapshot().activePanelId == null;
+				const showSurface = (box) => {
+					const element = surfaceRef.current;
+					if (!element) return;
+					if (!box && element.style.display !== "none") {
+						for (const capture of readingCaptures) {
+							try { capture(); } catch (error) { /* detached content cannot block navigation */ }
+						}
+					}
+					placeBox(element, box);
+					// Pane visibility is explicit. A visibility:hidden ancestor alone
+					// therefore cannot hide it; remove the entire surface from layout.
+					const display = box ? "" : "none";
+					if (element.style.display !== display) element.style.display = display;
+					if (element.inert !== !box) element.inert = !box;
+				};
 				const resize = new ResizeObserver(() => queue());
 				const measure = () => {
 					frame = 0;
+					if (!conversationActive()) { showSurface(null); return; }
 					const nextSeat = document.querySelector("[data-dsv-seat]");
 					if (nextSeat !== seat) {
 						resize.disconnect(); seat = nextSeat;
@@ -1613,19 +1827,29 @@ window.__ModuleLoader__.load({
 					}
 					const rect = seat && seat.getBoundingClientRect();
 					const next = rect && rect.width > 0 && rect.height > 0 ? { left: rect.left, top: rect.top, width: rect.width, height: rect.height } : null;
-					setBounds((previous) => previous && next && Object.keys(next).every((key) => previous[key] === next[key]) ? previous : next);
+					showSurface(next);
 				};
 				const queue = () => { if (!frame) frame = requestAnimationFrame(measure); };
-				const observer = new MutationObserver(queue);
+				const observer = new MutationObserver((records) => {
+					// Streaming messages change the fixed overlay's descendants,
+					// never the host seat. Avoid a layout read on every reply chunk.
+					if (records.every((record) => record.target.closest?.(".dsv-surface"))) return;
+					queue();
+				});
 				observer.observe(document.body, { childList: true, subtree: true });
 				window.addEventListener("resize", queue);
 				measure();
-				return () => { observer.disconnect(); resize.disconnect(); cancelAnimationFrame(frame); window.removeEventListener("resize", queue); };
+				const offPanel = panelInfo?.subscribe(() => {
+					if (conversationActive()) queue();
+					else { cancelAnimationFrame(frame); frame = 0; showSurface(null); }
+				});
+				return () => { offPanel?.(); observer.disconnect(); resize.disconnect(); cancelAnimationFrame(frame); window.removeEventListener("resize", queue); };
 			}, []);
 			return h("div", {
+				ref: surfaceRef,
 				className: "dsv-surface",
-				style: bounds ? { ...bounds, visibility: "visible" } : { visibility: "hidden", left: 0, top: 0, width: 0, height: 0 },
-			}, h(Takeover, { ...props, sessionId: mainSessionId }));
+				style: { visibility: "hidden", display: "none" },
+			}, content);
 		}
 
 		/** Keep horizontal navigation local to the strip; never scroll the page. */
@@ -1692,7 +1916,8 @@ window.__ModuleLoader__.load({
 			const [drop, setDrop] = React.useState(null);
 			const [insertAt, setInsertAt] = React.useState(null);
 			const layoutRef = React.useRef(null);
-			const [paneBounds, setPaneBounds] = React.useState({});
+			const paneRefs = React.useRef(new Map());
+			const layoutKey = React.useMemo(() => paneLayoutKey(snap.root), [snap.root]);
 			const dragTabRef = React.useRef(null);
 			const dropRef = React.useRef(null);
 			const splitRefs = React.useRef(new Map());
@@ -1706,20 +1931,27 @@ window.__ModuleLoader__.load({
 			React.useLayoutEffect(() => {
 				const layout = layoutRef.current;
 				if (!layout) return;
+				let frame = 0;
+				const present = new Set(groups.map((group) => group.id));
+				for (const id of paneRefs.current.keys()) if (!present.has(id)) paneRefs.current.delete(id);
 				const measure = () => {
-					const outer = layout.getBoundingClientRect(), next = {};
+					frame = 0;
+					const outer = layout.getBoundingClientRect(), boxes = [];
 					for (const seat of layout.querySelectorAll("[data-dsv-group-seat]")) {
 						const rect = seat.getBoundingClientRect();
-						next[seat.dataset.dsvGroupSeat] = { left: rect.left - outer.left, top: rect.top - outer.top, width: rect.width, height: rect.height };
+						boxes.push([paneRefs.current.get(seat.dataset.dsvGroupSeat)?.current, { left: rect.left - outer.left, top: rect.top - outer.top, width: rect.width, height: rect.height }]);
 					}
-					setPaneBounds((previous) => Object.keys(previous).length === Object.keys(next).length && Object.keys(next).every((id) => previous[id] && Object.keys(next[id]).every((key) => previous[id][key] === next[id][key])) ? previous : next);
+					// Finish all geometry reads before writing styles. A ResizeObserver
+					// delivery for several seats still schedules only one measurement.
+					for (const [element, box] of boxes) placeBox(element, box);
 				};
+				const queue = () => { if (!frame) frame = requestAnimationFrame(measure); };
 				measure();
-				const observer = new ResizeObserver(measure);
+				const observer = new ResizeObserver(queue);
 				observer.observe(layout);
 				for (const seat of layout.querySelectorAll("[data-dsv-group-seat]")) observer.observe(seat);
-				return () => observer.disconnect();
-			}, [snap.root]);
+				return () => { observer.disconnect(); cancelAnimationFrame(frame); };
+			}, [layoutKey]);
 
 			// Embedded composers autofocus when their session mounts. Focus by
 			// itself is not user intent: mirroring it into mainView remounts the
@@ -2017,38 +2249,26 @@ window.__ModuleLoader__.load({
 
 			const renderBody = (group, tab) => {
 				if (!tab) return h("div", { className: "dsv-empty" }, t("emptyPickerHint"));
-				if (!tab.sessionId) {
-					return h(SessionPicker, {
-						onPick: (picked) => {
-							if (typeof picked !== "string" || picked === "") return;
-							store.actions.setSession(group.id, tab.id, picked);
-						},
-					});
-				}
-				const status = held.get(tab.sessionId);
-				return h(
-					SessionHost,
-					{
-						key: tab.sessionId,
-						status: status || { kind: "missing" },
-						SessionProvider,
-						onRetry: () => retrySession(tab.sessionId),
-						onChoose: () => store.actions.setSession(group.id, tab.id, null),
-					},
-					renderSlot("splitview.pane", { groupId: group.id, tabId: tab.id }, { only: "body" }),
-				);
+				return h(TabContent, {
+					groupId: group.id, tabId: tab.id, sessionId: tab.sessionId,
+					active: tab.id === group.activeTabId,
+					status: held.get(tab.sessionId), renderSlot, SessionProvider, retrySession,
+				});
 			};
 
 			const renderGroup = (group) => {
 				const isActive = group.id === snap.activeGroupId;
 				const zone = drop && drop.groupId === group.id && drop.zone !== "tabbar" ? drop.zone : null;
+				let ref = paneRefs.current.get(group.id);
+				if (!ref) { ref = React.createRef(); paneRefs.current.set(group.id, ref); }
 				return h(
 					"div",
 					{
 						key: group.id,
+						ref,
 						className: "dsv-group" + (isActive ? " dsv-group--active" : "") + (zone && zone !== "center" ? " dsv-group--drop" : ""),
 						"data-dsv-group": group.id,
-						style: { position: "absolute", ...(paneBounds[group.id] || {}), visibility: paneBounds[group.id] ? "visible" : "hidden" },
+						style: { position: "absolute", visibility: "hidden" },
 						onPointerDownCapture: () => store.actions.focusGroup(group.id),
 						onFocusCapture: () => {
 							if (!keyboardFocus.current) return;
@@ -2226,14 +2446,312 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 
+		//#region compact sidebar
+		const SIDEBAR_KEY = "dsh-splitview:sidebar:v1";
+		/** Only local navigation counts are stored; conversation data is never read.
+		 * Keep a stable snapshot so a click invalidates the rail, not the workspace. */
+		function createSidebarPreferences(storage) {
+			const cleanPins = (ids) => Array.isArray(ids) ? [...new Set(ids.filter((id) => typeof id === "string" && id.length > 0 && id.length <= 200))].slice(0, 3) : null;
+			let snapshot = { compact: true, usage: {}, pinned: null };
+			const listeners = new Set();
+			try {
+				const saved = JSON.parse(storage?.getItem(SIDEBAR_KEY) || "null");
+				if (saved && typeof saved === "object") snapshot = {
+					compact: saved.compact !== false,
+					pinned: cleanPins(saved.pinned),
+					usage: Object.fromEntries(Object.entries(saved.usage || {}).filter(([id, count]) => id.length > 0 && id.length <= 200 && Number.isSafeInteger(count) && count > 0 && count <= 1e9).slice(0, 256)),
+				};
+			} catch (error) { /* corrupt or unavailable storage uses the compact defaults */ }
+			const update = (next) => {
+				snapshot = next;
+				try { storage?.setItem(SIDEBAR_KEY, JSON.stringify(next)); } catch (error) { /* private mode or a full store must not block navigation */ }
+				for (const listener of listeners) listener();
+			};
+			return {
+				getSnapshot: () => snapshot,
+				subscribe: (fn) => { listeners.add(fn); return () => listeners.delete(fn); },
+				setCompact: (compact) => { if (snapshot.compact !== !!compact) update({ ...snapshot, compact: !!compact }); },
+				resetUsage: () => { if (Object.keys(snapshot.usage).length) update({ ...snapshot, usage: {} }); },
+				initializePins: (panels) => {
+					if (snapshot.pinned === null && panels.length) update({ ...snapshot, pinned: partitionSidebarPanels(panels, snapshot.usage).common.map((panel) => panel.id) });
+				},
+				setPinned: (ids) => {
+					const pinned = cleanPins(ids);
+					if (pinned && JSON.stringify(pinned) !== JSON.stringify(snapshot.pinned)) update({ ...snapshot, pinned });
+				},
+				pin: (id, value) => {
+					if (typeof id !== "string" || !id || id.length > 200) return;
+					const pinned = snapshot.pinned || [];
+					if (value && !pinned.includes(id) && pinned.length < 3) update({ ...snapshot, pinned: [...pinned, id] });
+					else if (!value && pinned.includes(id)) update({ ...snapshot, pinned: pinned.filter((key) => key !== id) });
+				},
+				movePin: (id, targetId) => {
+					const pinned = snapshot.pinned || [], from = pinned.indexOf(id), to = pinned.indexOf(targetId);
+					if (from < 0 || to < 0 || from === to) return;
+					const next = pinned.filter((key) => key !== id); next.splice(to, 0, id);
+					update({ ...snapshot, pinned: next });
+				},
+				record: (id) => {
+					if (typeof id !== "string" || !id || id.length > 200) return;
+					const count = Object.hasOwn(snapshot.usage, id) ? snapshot.usage[id] : 0;
+					if (count >= 1e9) return;
+					const usage = { ...snapshot.usage, [id]: count + 1 };
+					if (Object.keys(usage).length > 256) delete usage[Object.keys(usage).find((key) => key !== id)];
+					update({ ...snapshot, usage });
+				},
+			};
+		}
+		const sidebarPreferences = createSidebarPreferences(typeof localStorage === "undefined" ? null : localStorage);
+		function partitionSidebarPanels(panels, usage, pinned = null) {
+			const seen = new Set();
+			const available = panels.filter((panel) => {
+				if (typeof panel.id !== "string" || !panel.id || seen.has(panel.id)) return false;
+				seen.add(panel.id); return true;
+			});
+			const count = (id) => Object.hasOwn(usage, id) ? usage[id] : 0;
+			const common = pinned === null
+				? available.map((panel, index) => ({ panel, index })).sort((a, b) => count(b.panel.id) - count(a.panel.id) || a.index - b.index).slice(0, 3).map(({ panel }) => panel)
+				: pinned.map((id) => available.find((panel) => panel.id === id)).filter(Boolean);
+			const ids = new Set(common.map((panel) => panel.id));
+			return { common, more: available.filter((panel) => !ids.has(panel.id)) };
+		}
+		const SIDEBAR_DRAG_TYPE = "application/x-dsv-sidebar-pin";
+		function usePinDrag() {
+			const source = React.useRef(null), suppressClick = React.useRef(false), timer = React.useRef(null);
+			const [over, setOver] = React.useState(null);
+			React.useEffect(() => () => clearTimeout(timer.current), []);
+			const finish = () => {
+				source.current = null; setOver(null); clearTimeout(timer.current);
+				timer.current = setTimeout(() => { suppressClick.current = false; }, 0);
+			};
+			return {
+				suppressClick,
+				props: (id) => ({
+					draggable: true, "data-dsv-pin-drop": over === id || undefined,
+					onDragStart: (event) => {
+						source.current = id; suppressClick.current = true;
+						event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData(SIDEBAR_DRAG_TYPE, id); event.stopPropagation();
+					},
+					onDragOver: (event) => {
+						if (!source.current || source.current === id) return;
+						event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = "move"; setOver(id);
+					},
+					onDragLeave: (event) => { if (!event.currentTarget.contains(event.relatedTarget)) setOver(null); },
+					onDrop: (event) => {
+						if (!source.current) return;
+						event.preventDefault(); event.stopPropagation(); sidebarPreferences.movePin(source.current, id); finish();
+					},
+					onDragEnd: finish,
+				}),
+			};
+		}
+		function SidebarFavorites({ open, onClose, panels, renderSlot }) {
+			const t = runtime.t;
+			const preferences = React.useSyncExternalStore(sidebarPreferences.subscribe, sidebarPreferences.getSnapshot, sidebarPreferences.getSnapshot);
+			const pinned = preferences.pinned || [], drag = usePinDrag();
+			if (!open) return null;
+			const glyph = (id) => renderSlot("sidebar.panellist", { size: 18, active: false }, { only: id });
+			return h(SidebarUI.Modal, { open, onClose, title: t("managePins"), closeLabel: t("closePins"), description: t("pinsDescription"), className: "dsv-favorites",
+				footer: h("div", { className: "dsv-favorites__footer" },
+					h("button", { type: "button", className: "dsv-favorites__secondary", onClick: () => sidebarPreferences.setPinned(partitionSidebarPanels(panels, preferences.usage).common.map((panel) => panel.id)) }, t("recommendPins")),
+					h("button", { type: "button", className: "dsv-favorites__done", onClick: onClose }, t("pinsDone"))),
+			},
+				h("div", { className: "dsv-favorites__heading" }, t("pinnedPlugins"), h("span", { role: "status", "aria-live": "polite" }, pinned.length + " / 3")),
+				h("ol", { className: "dsv-favorites__order", "aria-label": t("pinOrder") },
+					pinned.map((id, index) => {
+						const panel = panels.find((panel) => panel.id === id), name = panel?.label || id;
+						return h("li", { key: id, className: "dsv-favorites__row", "data-dsv-pin-row": id, ...drag.props(id) },
+							h("span", { className: "dsv-favorites__grip", "aria-hidden": true }, "⠿"),
+							h("span", { className: "dsv-favorites__glyph", "aria-hidden": true }, panel ? glyph(id) : h(SidebarUI.IconPinOutlineRegular, { size: 18 })),
+							h("span", { className: "dsv-favorites__name" }, name),
+							h("button", { type: "button", className: "dsv-favorites__small", disabled: index === 0, "aria-label": t("movePinUp", { name }), onClick: () => sidebarPreferences.movePin(id, pinned[index - 1]) }, "↑"),
+							h("button", { type: "button", className: "dsv-favorites__small", disabled: index === pinned.length - 1, "aria-label": t("movePinDown", { name }), onClick: () => sidebarPreferences.movePin(id, pinned[index + 1]) }, "↓"),
+							h("button", { type: "button", className: "dsv-favorites__small", "aria-label": t("unpinPlugin", { name }), onClick: () => sidebarPreferences.pin(id, false) }, h(SidebarUI.IconCloseOutlineRegular, { size: 14 })));
+					}),
+					Array.from({ length: 3 - pinned.length }, (_, index) => h("li", { key: "empty-" + index, className: "dsv-favorites__empty" }, t("emptyPin")))),
+				h("div", { className: "dsv-favorites__heading" }, t("choosePins")),
+				h("div", { className: "dsv-favorites__choices" }, panels.map((panel) => {
+					const selected = pinned.includes(panel.id);
+					return h("label", { key: panel.id, className: "dsv-favorites__choice", "data-selected": selected },
+						h("span", { className: "dsv-favorites__glyph", "aria-hidden": true }, glyph(panel.id)),
+						h("span", { className: "dsv-favorites__name" }, panel.label),
+						h("input", { type: "checkbox", checked: selected, disabled: !selected && pinned.length >= 3, "aria-label": t("pinPlugin", { name: panel.label }), onChange: (event) => sidebarPreferences.pin(panel.id, event.target.checked) }));
+				})),
+				h("p", { className: "dsv-favorites__hint" }, t(pinned.length >= 3 ? "pinsFull" : "pinsAvailable")),
+			);
+		}
+		function SidebarRail({ panels, selectPanel, usePanelInfo, renderSlot }) {
+			const t = runtime.t;
+			const preferences = React.useSyncExternalStore(sidebarPreferences.subscribe, sidebarPreferences.getSnapshot, sidebarPreferences.getSnapshot);
+			const activePanelId = usePanelInfo((info) => info.activePanelId);
+			React.useLayoutEffect(() => sidebarPreferences.initializePins(panels), [panels]);
+			const { common, more } = React.useMemo(() => partitionSidebarPanels(panels, preferences.usage, preferences.pinned), [panels, preferences.usage, preferences.pinned]);
+			const [open, setOpen] = React.useState(false);
+			const [managing, setManaging] = React.useState(false);
+			const drag = usePinDrag();
+			const onDismiss = React.useCallback(() => setOpen(false), []);
+			const onOpen = (id) => {
+				selectPanel(id);
+				sidebarPreferences.record(id);
+				onDismiss();
+			};
+			const glyph = (panel) => renderSlot("sidebar.panellist", { size: 18, active: panel.id === activePanelId }, { only: panel.id });
+			return h("nav", { className: "dsv-sidebar__nav", "aria-label": t("sidebarNavigation") },
+				common.map((panel) => h(SidebarUI.Tooltip, { key: panel.id, label: panel.label, side: "right", delayMs: 400, portal: true },
+					h("button", { type: "button", className: "dsv-sidebar__icon", "data-dsv-sidebar-panel": panel.id, "aria-label": panel.label,
+						...drag.props(panel.id), title: t("pinDragHint"),
+						onContextMenu: (event) => { event.preventDefault(); setManaging(true); },
+						onKeyDown: (event) => {
+							if (!event.altKey || !["ArrowUp", "ArrowDown"].includes(event.key)) return;
+							event.preventDefault(); event.stopPropagation(); const at = common.findIndex((item) => item.id === panel.id);
+							sidebarPreferences.movePin(panel.id, common[at + (event.key === "ArrowUp" ? -1 : 1)]?.id);
+						},
+						"aria-current": activePanelId === panel.id ? "page" : undefined, onClick: () => { if (!drag.suppressClick.current) onOpen(panel.id); } }, glyph(panel)))),
+				Array.from({ length: 3 - common.length }, (_, index) => h("button", { key: "choose-" + index, type: "button", className: "dsv-sidebar__icon dsv-sidebar__empty-pin", "aria-label": t("managePins"), onClick: () => setManaging(true) }, "+")),
+				h(SidebarUI.Menu, { open, onClose: onDismiss, portal: true, autoFocus: true, listClassName: "dsv-sidebar-menu",
+					anchor: h(SidebarUI.Tooltip, { label: t("sidebarMore"), side: "right", delayMs: 400, portal: true },
+						h("button", { type: "button", className: "dsv-sidebar__icon", "data-dsv-sidebar-more": "", "aria-label": t("sidebarMore"), "aria-haspopup": "menu", "aria-expanded": open,
+							"data-active": more.some((panel) => panel.id === activePanelId), onClick: () => setOpen((value) => !value) }, h(SidebarUI.IconAppsAddOutlineRegular, { size: 18 }))),
+				},
+					h("div", { className: "dsv-sidebar-menu__title", role: "presentation" }, t("sidebarMoreTitle")),
+					more.map((panel) => h(SidebarUI.MenuItemButton, { key: panel.id, icon: glyph(panel), current: panel.id === activePanelId,
+						"data-dsv-sidebar-menu-panel": panel.id, onSelect: () => onOpen(panel.id) }, h("span", { className: "dsv-sidebar-menu__label" }, panel.label))),
+					h(SidebarUI.MenuItemButton, { separatorBefore: true, icon: h(SidebarUI.IconPinOutlineRegular, { size: 18 }), onSelect: () => { onDismiss(); setManaging(true); } }, t("managePins")),
+					h("div", { className: "dsv-sidebar-menu__extensions" }, renderSlot("sidebar.panellist.actions", {
+						entries: [], onOpen, onPinnedChange: () => {}, onDismiss,
+					}))),
+				h(SidebarFavorites, { open: managing, onClose: () => setManaging(false), panels, renderSlot }),
+			);
+		}
+		/** Reuse the host's workspace, account controls, permissions and navigation
+		 * callbacks. Only the shell changes; plugin entry registration stays native. */
+		function CompactSidebar({ collapsed, width, drawer, startSession, toggleSidebar, selectPanel, useRemoteAccess, usePanels, usePanelInfo, renderSlot }) {
+			const t = runtime.t;
+			const panels = usePanels((rows) => rows);
+			const canStart = useRemoteAccess("session/create");
+			const column = React.useRef(null);
+			const previousCollapsed = React.useRef(collapsed), expandedWidth = React.useRef(width > 56 ? width : 280);
+			SidebarUI.useModalLayer(column, drawer && !collapsed, toggleSidebar);
+			React.useLayoutEffect(() => column.current ? installPluginRail(column.current) : undefined, []);
+			React.useLayoutEffect(() => {
+				if (!collapsed && !drawer) {
+					if (previousCollapsed.current && width !== expandedWidth.current) runtime.layout?.panels?.setSidebar(expandedWidth.current);
+					else if (width > 56) expandedWidth.current = width;
+				}
+				previousCollapsed.current = collapsed;
+			}, [collapsed, width, drawer]);
+			React.useLayoutEffect(() => {
+				if (collapsed && column.current?.querySelector(".dsv-sidebar__workspaces")?.contains(document.activeElement)) column.current.querySelector("[data-dsv-workspace-button]")?.focus({ preventScroll: true });
+			}, [collapsed]);
+			const workspaces = React.useMemo(() => renderSlot("sidebar.workspaces", { wide: !collapsed, expandSidebar: () => { if (collapsed) toggleSidebar(); } }), [renderSlot, collapsed, toggleSidebar]);
+			return h("div", { ref: column, className: "dsv-sidebar", "data-dsv-compact-sidebar": "", role: drawer && !collapsed ? "dialog" : undefined,
+				"aria-modal": drawer && !collapsed || undefined, "data-shortcut-modal": drawer && !collapsed ? "sidebar" : undefined,
+				style: { width: (collapsed ? 56 : width) + "px" } },
+				h("div", { className: "dsv-sidebar__rail" },
+					h(SidebarUI.Tooltip, { label: t(collapsed ? "sidebarExpand" : "sidebarCollapse"), side: "right", delayMs: 400, portal: true },
+						h("button", { type: "button", className: "dsv-sidebar__icon dsv-sidebar__toggle", "data-sidebar-toggle": true, "data-dsh-responsive-part": "sidebar-toggle", "data-modal-autofocus": drawer || undefined,
+							"aria-label": t(collapsed ? "sidebarExpand" : "sidebarCollapse"), "aria-expanded": !collapsed, "aria-keyshortcuts": "Control+B Meta+B", onClick: toggleSidebar }, h(SidebarUI.IconPanelLeftOutlineRegular, { size: 18 }))),
+					h(SidebarUI.Tooltip, { label: t("sidebarNew"), side: "right", delayMs: 400, portal: true },
+						h("button", { type: "button", className: "dsv-sidebar__icon dsv-sidebar__brand", "aria-label": t("sidebarNew"), disabled: !canStart, onClick: () => startSession() },
+							renderSlot("sidebar.brand.mark", { size: 24 }, { fallback: h(SidebarUI.FishLogo, { size: 24 }) }))),
+					h(SidebarUI.Tooltip, { label: t("workspaceEntry"), side: "right", delayMs: 400, portal: true },
+						h("button", { type: "button", className: "dsv-sidebar__icon dsv-sidebar__workspace-entry", "data-dsv-workspace-button": "",
+							"aria-label": t("workspaceEntry"), "aria-controls": "dsv-sidebar-workspaces", "aria-expanded": !collapsed, "aria-keyshortcuts": "Control+B Meta+B",
+							title: t(collapsed ? "sidebarExpand" : "sidebarCollapse"), onClick: toggleSidebar },
+							h(collapsed ? SidebarUI.IconFolderCloseRegular : SidebarUI.IconFolderOpenRegular, { size: 20 }))),
+					h(SidebarRail, { panels, selectPanel, usePanelInfo, renderSlot }),
+					h("div", { className: "dsv-sidebar__foot" }, renderSlot("sidebar.footer.action", { wide: false }), renderSlot("sidebar.settings", { wide: false }))),
+				h("div", { id: "dsv-sidebar-workspaces", className: "dsv-sidebar__workspaces", hidden: collapsed, inert: collapsed },
+					canStart && h("button", { type: "button", className: "dsv-sidebar__new", "aria-label": t("sidebarNew"), onClick: () => startSession() }, h(SidebarUI.IconNewChatOutlineRegular, { size: 14 }), t("sidebarNew")),
+					h("div", { className: "dsv-sidebar__region" }, workspaces)),
+			);
+		}
+		function railColumns(columns) {
+			return /^\d+(?:\.\d+)?px\s/.test(columns) ? columns.replace(/^\d+(?:\.\d+)?px/, "56px") : "";
+		}
+		/** Scope geometry changes to the native sidebar's frame. No conversation
+		 * DOM observation, React invalidation, or ownership of the right panel. */
+		function installPluginRail(root) {
+			const column = root.closest('[data-slot="sidebar"]')?.parentElement, frame = column?.parentElement;
+			if (!frame) return () => {};
+			let changedInert = false;
+			const sync = () => {
+				const columns = railColumns(frame.style.gridTemplateColumns);
+				if (columns && frame.style.getPropertyValue("--dsv-rail-columns") !== columns) frame.style.setProperty("--dsv-rail-columns", columns);
+				if (frame.hasAttribute("data-sidebar-collapsed") && column.inert) { column.inert = false; changedInert = true; }
+			};
+			frame.setAttribute("data-dsv-plugin-rail", ""); column.setAttribute("data-dsv-sidebar-column", "");
+			const observer = new MutationObserver(sync);
+			observer.observe(frame, { attributes: true, attributeFilter: ["style", "data-sidebar-collapsed"] });
+			observer.observe(column, { attributes: true, attributeFilter: ["inert"] });
+			sync();
+			return () => {
+				observer.disconnect(); frame.removeAttribute("data-dsv-plugin-rail"); frame.style.removeProperty("--dsv-rail-columns"); column.removeAttribute("data-dsv-sidebar-column");
+				if (changedInert) column.inert = frame.hasAttribute("data-sidebar-drawer") && frame.hasAttribute("data-sidebar-collapsed");
+			};
+		}
+		/** Some skins leave a hidden aria-modal dialog in the DOM. Correct only
+		 * this command's context, retaining its native binding and invocation path. */
+		function installSidebarShortcut(ctx) {
+			let original = null, command = null, wrapped = null;
+			const release = () => { if (command?.resolve === wrapped) command.resolve = original; command = original = wrapped = null; };
+			const sync = () => {
+				const next = ctx.shortcuts.registry?.commands?.get("sidebar.left.toggle");
+				if (next === command) return;
+				release(); if (!next) return;
+				command = next; original = command.resolve;
+				wrapped = (context) => {
+					let modal = null;
+					for (const node of document.querySelectorAll('[role="dialog"][aria-modal="true"], [role="menu"]')) {
+						if (node.getAttribute("aria-hidden") === "true" || node.hidden || node.checkVisibility?.({ visibilityProperty: true, opacityProperty: true }) === false) continue;
+						const box = node.getBoundingClientRect();
+						if (box.width > 0 && box.height > 0) modal = node.dataset.shortcutModal || "other";
+					}
+					return original({ ...context, modal });
+				};
+				command.resolve = wrapped;
+			};
+			const off = ctx.shortcuts.catalog.subscribe(sync); sync();
+			return () => { off(); release(); };
+		}
+		function installCompactSidebar(ctx) {
+			let original = null, dispose = null, offShortcut = null, stopped = false, syncing = false;
+			const sync = () => {
+				if (stopped || syncing) return;
+				syncing = true;
+				try {
+					const native = sidebarPreferences.getSnapshot().compact ? ctx.slots.entries("sidebar").find((entry) => entry.component !== CompactSidebarEntry && typeof entry.inject === "function") : null;
+					if (native === original) return;
+					dispose?.(); offShortcut?.(); dispose = offShortcut = null; original = native;
+					if (native) { offShortcut = installSidebarShortcut(ctx); dispose = ctx.slots.register({ name: "sidebar", priority: -1, locale: NS, inject: native.inject,
+						children: Object.fromEntries(Object.entries(native.children || {}).map(([name, spec]) => [nativeSlotName(name), spec])),
+					}, CompactSidebarEntry); }
+				} finally { syncing = false; }
+			};
+			const offEntries = ctx.slots.subscribe("sidebar", sync), offPreferences = sidebarPreferences.subscribe(sync);
+			sync();
+			return () => { stopped = true; offEntries(); offPreferences(); dispose?.(); offShortcut?.(); };
+		}
+		function CompactSidebarEntry(props) {
+			const renderSlot = React.useCallback((name, owner, options) => props.renderSlot(nativeSlotName(name), owner, options), [props.renderSlot]);
+			return h(CompactSidebar, { ...props, renderSlot });
+		}
+		//#endregion
+
 		//#region settings section
 		function SettingsSection() {
 			const t = runtime.t;
 			const snap = useLayout();
 			const groups = countGroups(snap.root);
+			const sidebar = React.useSyncExternalStore(sidebarPreferences.subscribe, sidebarPreferences.getSnapshot, sidebarPreferences.getSnapshot);
 			return h(
 				"div",
 				{ className: "dsv-set" },
+				h("div", { className: "dsv-set__row" },
+					h("div", { className: "dsv-set__text" }, h("div", { className: "dsv-set__title" }, t("setCompactSidebar")), h("div", { className: "dsv-set__desc" }, t("setCompactSidebarDesc"))),
+					h("div", { className: "dsv-set__ctl" },
+						h("button", { type: "button", className: "dsv-set__btn", onClick: sidebarPreferences.resetUsage }, t("resetSidebarUsage")),
+						h("input", { type: "checkbox", checked: sidebar.compact, "aria-label": t("setCompactSidebar"), onChange: (event) => sidebarPreferences.setCompact(event.target.checked) }))),
 				h(
 					"div",
 					{ className: "dsv-set__row" },
@@ -2298,6 +2816,12 @@ window.__ModuleLoader__.load({
 		//#region locale
 		const MESSAGES = {
 			zh: {
+				setCompactSidebar: "紧凑侧栏", setCompactSidebarDesc: "用窄图标栏固定最多 3 个插件，其余放进“更多”。可在“管理常用插件”中选择和排序，关闭可恢复原侧栏。", resetSidebarUsage: "清除使用次数",
+				managePins: "管理常用插件", closePins: "关闭常用插件管理", pinsDescription: "固定最多 3 个入口，顺序由你决定，使用次数不会改变位置。",
+				pinnedPlugins: "已固定", pinOrder: "常用插件顺序", choosePins: "选择插件", emptyPin: "空位 · 从下方选择插件", pinPlugin: "固定 {name}", unpinPlugin: "取消固定 {name}",
+				movePinUp: "上移 {name}", movePinDown: "下移 {name}", pinDragHint: "拖动排序，或按 Alt + ↑ / ↓ 调整位置；右键管理常用插件",
+				recommendPins: "按使用频率推荐", pinsDone: "完成", pinsFull: "已固定 3 项。先取消一项，再选择其他插件。支持拖动上方列表或使用方向按钮排序。", pinsAvailable: "勾选要固定的插件。调整会立即保存到本机。",
+				sidebarNavigation: "常用插件", sidebarMore: "更多", sidebarMoreTitle: "更多插件", sidebarNew: "新会话", sidebarExpand: "展开工作区", sidebarCollapse: "收起工作区", workspaceEntry: "工作区",
 				panel: "分屏视图",
 				paneTabs: "窗格 {number} 的会话标签",
 				scrollTabsLeft: "向左滚动标签", scrollTabsRight: "向右滚动标签", closeNamedTab: "关闭标签：{name}",
@@ -2333,6 +2857,12 @@ window.__ModuleLoader__.load({
 				cmdPrevGroup: "分屏：上一个窗格",
 			},
 			en: {
+				setCompactSidebar: "Compact sidebar", setCompactSidebarDesc: "Pin up to 3 plugins in the icon rail and put the rest in More. Choose and reorder them in Manage favorites. Turn off to restore the original sidebar.", resetSidebarUsage: "Clear usage counts",
+				managePins: "Manage favorites", closePins: "Close favorites", pinsDescription: "Pin up to 3 plugins in your preferred order. Usage never changes their positions.",
+				pinnedPlugins: "Pinned", pinOrder: "Favorite plugin order", choosePins: "Choose plugins", emptyPin: "Empty slot · choose a plugin below", pinPlugin: "Pin {name}", unpinPlugin: "Unpin {name}",
+				movePinUp: "Move {name} up", movePinDown: "Move {name} down", pinDragHint: "Drag or press Alt + Up / Down to reorder; right-click to manage favorites",
+				recommendPins: "Suggest by usage", pinsDone: "Done", pinsFull: "3 plugins pinned. Unpin one to choose another. Drag the list above or use its arrow buttons to reorder.", pinsAvailable: "Select plugins to pin. Changes are saved on this device immediately.",
+				sidebarNavigation: "Frequent plugins", sidebarMore: "More", sidebarMoreTitle: "More plugins", sidebarNew: "New session", sidebarExpand: "Expand workspaces", sidebarCollapse: "Collapse workspaces", workspaceEntry: "Workspaces",
 				panel: "Split View",
 				paneTabs: "Session tabs for pane {number}",
 				scrollTabsLeft: "Scroll tabs left", scrollTabsRight: "Scroll tabs right", closeNamedTab: "Close tab: {name}",
@@ -2514,7 +3044,7 @@ window.__ModuleLoader__.load({
 		// undeclared service off `ctx` throws "cannot get property X without inject".
 		// Declaring it here keeps the bridge in the takeover panel (focusing a pane
 		// makes its session the app's current one) working.
-		const inject = ["slots", "sessions", "locale", "shortcuts", "uiWorkspace"];
+		const inject = ["slots", "sessions", "locale", "shortcuts", "uiWorkspace", "layout"];
 
 		function apply(ctx) {
 			try {
@@ -2534,6 +3064,7 @@ window.__ModuleLoader__.load({
 			}, "dsh-splitview: workspace persistence");
 			runtime.ctx = ctx;
 			runtime.sessions = ctx.sessions || null;
+			runtime.layout = ctx.layout || null;
 			try {
 				runtime.uiWorkspace = ctx.uiWorkspace || null;
 			} catch (error) {
@@ -2564,6 +3095,7 @@ window.__ModuleLoader__.load({
 				children: { [nativeSlotName("conversation.input.attachments")]: { kind: "single", scope: "session-maybe" } },
 			}, PaneAttachments)), "dsh-splitview: native attachment routing");
 			ctx.effect(() => installNativeHeader(ctx), "dsh-splitview: native header bridge");
+			ctx.effect(() => ctx.slots.inject("sidebar", () => installCompactSidebar(ctx)), "dsh-splitview: compact sidebar");
 
 			// Entry point where the user already is: the session header.
 			ctx.effect(
